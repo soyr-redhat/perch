@@ -33,6 +33,7 @@ def main():
         (root / "sources.json").write_text(json.dumps({"sources": [{
             "id": "fixture", "patterns": [str(root / "sessions" / "*.jsonl")],
             "cmd": [sys.executable, "-u", fixture, str(root)],
+            "message": ["--message", "{session}", "{text}"],
             "map": {"id": "id", "cwd": "cwd", "role": "role", "text": "text"},
         }]}))
         proc = subprocess.Popen([executable, "--no-browser", "--port", "0"], env={**os.environ, "PERCH_DATA_DIR": str(root)}, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == "nt" else 0)
@@ -51,6 +52,9 @@ def main():
             wait_for(lambda: (root / "instance.json").is_file(), proc)
             info = json.loads((root / "instance.json").read_text())
             wait_for(lambda: not request("/api/snapshot").get("loading"), proc)
+            second = subprocess.run([executable, "--no-browser", "--port", "0"], env={**os.environ, "PERCH_DATA_DIR": str(root)}, capture_output=True, timeout=15)
+            assert second.returncode == 0, second.stderr
+            assert json.loads((root / "instance.json").read_text()) == info
             term = request("/api/spawn", {"harness": "fixture", "cwd": str(root)})["term"]
             term_id = term["id"]
             assert term["alive"]
@@ -83,7 +87,10 @@ def main():
             request("/api/kill", {"id": term_id})
             term_id = None
             assert request("/api/snapshot")["terms"] == []
-            print("Packaged backend, WebSocket input, terminal child, and cleanup passed")
+            wait_for(lambda: any(a["id"] == "fixture:new-session" for a in request("/api/snapshot")["agents"]), proc)
+            request("/api/message", {"agent": "fixture:new-session", "text": "packaged reply"})
+            wait_for(lambda: "Fixture reply: packaged reply" in transcript.read_text(), proc)
+            print("Packaged single instance, backend, terminal input/output, headless reply, and cleanup passed")
         finally:
             marker = root / "fixture-started.json"
             print("Fixture startup:", marker.read_text() if marker.exists() else "never entered fixture", flush=True)
