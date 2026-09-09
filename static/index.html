@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perch</title>
+<script>document.documentElement.dataset.theme = localStorage.getItem("perch.theme") || "dark";</script>
+<link rel="stylesheet" href="/xterm.min.css">
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='38' fill='%2330d158'/></svg>">
+</head>
+<body>
+  <div class="aurora aurora-a"></div>
+  <div class="aurora aurora-b"></div>
+  <div class="aurora aurora-c"></div>
+
+  <div class="window" id="window">
+    <header class="titlebar">
+      <div class="lights" aria-hidden="true">
+        <span class="light red"></span><span class="light yellow"></span><span class="light green"></span>
+      </div>
+      <div class="titlebar-title">Perch</div>
+      <div class="titlebar-right">
+        <button class="themebtn" id="gear" title="settings">⚙</button>
+        <button class="themebtn" id="theme" title="toggle light / dark">◑</button>
+        <span class="conn" id="conn" title="live updates"></span>
+        <span class="live-pill" id="live-pill">—</span>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside class="sidebar" id="sidebar"></aside>
+      <main class="detail" id="detail"></main>
+    </div>
+
+    <footer class="watchbar" id="watchbar"></footer>
+  </div>
+
+<script src="/xterm.min.js"></script>
+<script src="/xterm-addon-fit.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
