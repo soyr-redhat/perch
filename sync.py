@@ -239,7 +239,7 @@ def _backup(path):
     p = Path(path)
     if p.exists():
         backup = p.with_name(p.name + f".perch-{time.time_ns()}.bak")
-        atomic_write(backup, p.read_text(encoding="utf-8"))
+        atomic_write(backup, p.read_bytes().decode("utf-8"))
 
 
 def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False) -> dict:

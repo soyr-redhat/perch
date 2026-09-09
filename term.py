@@ -145,7 +145,13 @@ class Pty:
 
     def read(self) -> bytes:
         if self._kind == "win":
-            return self._p.read().encode("utf-8", "replace")
+            # pywinpty can return an empty string for a temporary no-data read.
+            # Only EOF or a finished process should end the output pump.
+            while True:
+                chunk = self._p.read()
+                if chunk or not self._p.isalive():
+                    return chunk.encode("utf-8", "replace")
+                time.sleep(.01)
         fd = self._m
         return os.read(fd, 16384) if fd is not None else b""
 

@@ -262,7 +262,7 @@ class Adapter:
     message: Optional[list[str]] = None  # headless one-shot; "{session}"/"{text}" substituted
 
     def spawn_argv(self, session: Optional[str] = None) -> Optional[list[str]]:
-        if not self.cmd:
+        if not self.cmd or (session and session.startswith("-")):
             return None
         if session and self.resume:
             return self.cmd + [p.replace("{session}", session) for p in self.resume]
@@ -270,7 +270,7 @@ class Adapter:
 
     def message_argv(self, session: str, text: str) -> Optional[list[str]]:
         """Argv to deliver one message into an existing session, non-interactively."""
-        if not self.cmd or not self.message:
+        if not self.cmd or not self.message or not session or session.startswith("-"):
             return None
         return self.cmd + [p.replace("{session}", session).replace("{text}", text) for p in self.message]
 
@@ -298,7 +298,7 @@ class OmpAdapter(Adapter):
     def __init__(self):
         self.cmd = _which("omp", "~/AppData/Local/omp/omp.exe")
         self.resume = ["--resume", "{session}"]
-        self.message = ["--print", "--resume", "{session}", "{text}"]
+        self.message = ["--print", "--resume", "{session}", "--", "{text}"]
 
     def consume(self, rec: dict, st: FileState) -> None:
         rtype = rec.get("type")
@@ -350,7 +350,7 @@ class ClaudeAdapter(Adapter):
     def __init__(self):
         self.cmd = _which("claude", "~/AppData/Roaming/npm/claude.cmd", "~/.local/bin/claude")
         self.resume = ["--resume", "{session}"]
-        self.message = ["-p", "--resume", "{session}", "{text}"]
+        self.message = ["-p", "--resume", "{session}", "--", "{text}"]
 
     def consume(self, rec: dict, st: FileState) -> None:
         rtype = rec.get("type")
@@ -409,7 +409,7 @@ class CodexAdapter(Adapter):
             str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions/**/*.jsonl")
         ]
         self.resume = ["resume", "{session}"]
-        self.message = ["exec", "resume", "{session}", "{text}"]
+        self.message = ["exec", "resume", "{session}", "--", "{text}"]
 
     def consume(self, rec: dict, st: FileState) -> None:
         rtype = rec.get("type")

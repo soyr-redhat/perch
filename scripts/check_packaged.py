@@ -53,7 +53,7 @@ def main():
             term = request("/api/spawn", {"harness": "fixture", "cwd": str(root)})["term"]
             term_id = term["id"]
             assert term["alive"]
-            with socket.create_connection(("127.0.0.1", info["port"]), timeout=5) as connection:
+            with socket.create_connection(("127.0.0.1", info["port"]), timeout=20) as connection:
                 connection.sendall((f'GET /ws/term/{term_id} HTTP/1.1\r\nHost: 127.0.0.1:{info["port"]}\r\nX-Perch-Token: {info["token"]}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n').encode())
                 with connection.makefile("rb") as stream:
                     assert b"101" in stream.readline()
@@ -61,7 +61,10 @@ def main():
                         pass
                     output = b""
                     while b"FIXTURE_READY" not in output:
-                        header = stream.read(2)
+                        try:
+                            header = stream.read(2)
+                        except TimeoutError as error:
+                            raise AssertionError("Terminal did not become ready: " + repr(output)) from error
                         assert len(header) == 2, repr(output)
                         length = header[1] & 127
                         if length == 126:
@@ -81,14 +84,19 @@ def main():
             assert request("/api/snapshot")["terms"] == []
             print("Packaged backend, WebSocket input, terminal child, and cleanup passed")
         finally:
-            if term_id and info:
-                request("/api/kill", {"id": term_id})
-            proc.terminate()
             try:
-                proc.communicate(timeout=5)
+                if term_id and info:
+                    print("Terminal state:", request("/api/snapshot").get("terms"))
+                    request("/api/kill", {"id": term_id})
+            finally:
+                proc.terminate()
+            try:
+                _, errors = proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate(timeout=5)
+                _, errors = proc.communicate(timeout=5)
+            if errors:
+                print(errors.decode("utf-8", "replace"), file=sys.stderr)
 
 
 if __name__ == "__main__":

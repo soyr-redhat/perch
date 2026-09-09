@@ -10,16 +10,32 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import perch
 import scanner
 import server
 import sync
-from term import TermRegistry
+from term import Pty, TermRegistry
 
 
 class TranscriptContractTests(unittest.TestCase):
+    def test_windows_temporary_empty_read_is_not_eof(self):
+        pty = Pty.__new__(Pty)
+        pty._kind = "win"
+        pty._p = Mock()
+        pty._p.read.side_effect = ["", "ready"]
+        pty._p.isalive.return_value = True
+        self.assertEqual(pty.read(), b"ready")
+
+    def test_session_id_cannot_be_interpreted_as_cli_flags(self):
+        for kind in (scanner.CodexAdapter, scanner.ClaudeAdapter, scanner.OmpAdapter):
+            adapter = kind()
+            adapter.cmd = ["fixture"]
+            self.assertIsNone(adapter.spawn_argv("--dangerously-bypass-approvals-and-sandbox"))
+            self.assertIsNone(adapter.message_argv("--last", "hello"))
+            self.assertEqual(adapter.message_argv("fixture-id", "--help")[-2:], ["--", "--help"])
+
     def test_optional_declarative_metadata_is_absent(self):
         adapter = scanner.DeclarativeAdapter({"id": "fixture", "map": {"role": "role", "text": "text"}})
         state = scanner.FileState("fixture")
@@ -60,6 +76,14 @@ class TranscriptContractTests(unittest.TestCase):
 
 
 class SharingContractTests(unittest.TestCase):
+    def test_backup_preserves_windows_line_endings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            original = b'{\r\n  "mcpServers": {}\r\n}\r\n'
+            path.write_bytes(original)
+            sync._backup(path)
+            self.assertEqual(next(Path(temp).glob('*.bak')).read_bytes(), original)
+
     def test_transport_specific_fields_are_not_silently_dropped(self):
         for definition in (
             {"command": "fixture", "headers": {"X-Test": "value"}},
