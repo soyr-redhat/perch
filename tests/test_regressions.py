@@ -309,6 +309,63 @@ class TerminalTests(unittest.TestCase):
             self.assertIsNone(term.pty._m)
 
 
+class CliDesktopSharingTests(unittest.TestCase):
+    def test_cli_preview_and_desktop_apply_share_one_contract(self):
+        import contextlib
+        import perch
+        import storage
+        import sys
+
+        with tempfile.TemporaryDirectory() as temp, contextlib.ExitStack() as stack:
+            root = Path(temp)
+            paths = {
+                k: str(root / (k + (".toml" if k == "codex" else ".json")))
+                for k in ("claude", "codex", "omp", "claude-desktop", "claude_mcpjson")
+            }
+            Path(paths["claude"]).write_text(json.dumps({"mcpServers": {"portable": {"command": "example"}}}))
+            skill_roots = {k: str(root / "skills" / k) for k in ("claude", "codex", "omp")}
+            source = Path(skill_roots["claude"]) / "review"
+            source.mkdir(parents=True)
+            (source / "SKILL.md").write_text(
+                "---\nname: review\ndescription: Review code\n---\nReview changes."
+            )
+            for obj, name, value in [
+                (sync, "PERCH_DIR", str(root / "state")),
+                (sync, "MANIFEST", str(root / "state" / "manifest.json")),
+                (sync, "SKILL_ROOTS", skill_roots),
+                (settings, "PATH", str(root / "state" / "settings.json")),
+            ]:
+                stack.enter_context(patch.object(obj, name, value))
+            stack.enter_context(patch.object(sync, "_paths", return_value=paths))
+            stack.enter_context(
+                patch.object(settings, "sync_lock", lambda: storage.sync_lock(root / "state"))
+            )
+            output = io.StringIO()
+            with patch.object(sys, "argv", ["perch", "--dry-run"]), contextlib.redirect_stdout(output):
+                perch.main()
+            cli_plan = json.loads(output.getvalue())
+            self.assertFalse(Path(paths["codex"]).exists())
+            host = server.serve(DemoScanner(), TermRegistry(), 0)
+            threading.Thread(target=host.serve_forever, daemon=True).start()
+            stack.callback(host.close)
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{host.server_port}/api/sync",
+                data=json.dumps({"preview": False, "revision": cli_plan["revision"]}).encode(),
+                headers={"X-Perch-Token": host.token, "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                applied = json.load(response)
+            self.assertEqual(applied["mcp"]["added"], cli_plan["mcp"]["added"])
+            self.assertEqual(
+                tomllib.loads(Path(paths["codex"]).read_text())["mcp_servers"]["portable"]["command"],
+                "example",
+            )
+            self.assertEqual(
+                (Path(skill_roots["codex"]) / "review" / "SKILL.md").read_text(),
+                (source / "SKILL.md").read_text(),
+            )
+
+
 class SettingsTests(unittest.TestCase):
     def test_invalid_saved_types_do_not_escape(self):
         cfg = settings.validate(

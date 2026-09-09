@@ -21,22 +21,21 @@
     <header class="toolbar"><div class="breadcrumb"><span id="view-label">Sessions</span><span class="divider">/</span><strong id="project-label">Your workspace</strong></div><button class="icon-button" id="theme" title="Change color theme" aria-label="Change color theme">◐</button></header>
     <div class="health" id="health" role="status" hidden></div>
     <section id="session-view" class="session-view">
-      <div class="session-heading"><div><div class="eyebrow" id="harness-label">All your agents, together</div><h1 id="session-title">A place to keep work moving.</h1><div class="session-meta" id="session-meta"></div></div><div class="session-actions" id="session-actions"></div></div>
+      <div class="session-heading"><div><div class="eyebrow" id="harness-label">Sessions</div><h1 id="session-title">No session selected</h1><div class="session-meta" id="session-meta"></div></div><div class="session-actions" id="session-actions"></div></div>
       <div class="view-tabs" id="view-tabs" role="tablist" aria-label="Session views"></div>
       <div class="activity-view" id="activity-view">
         <div class="history-toolbar" id="history-toolbar" hidden><span id="history-caption">Recent activity</span><div><button id="history-prev" hidden>Earlier</button><button id="history-live" hidden>Back to live</button><select id="history" aria-label="Jump to a prompt"><option value="">Jump to a prompt</option></select></div></div>
-        <div class="feed" id="feed" tabindex="0" aria-label="Session activity"><div class="welcome"><img src="/icon.svg" width="52" height="52" alt=""><h2>One workspace. Every agent.</h2><p>Start a session here, or keep working in your CLI.<br>Perch brings the activity together as you go.</p><button class="primary" id="welcome-new">Start a session</button><button class="text-button" id="welcome-tools">Set up shared tools</button></div></div>
+        <div class="feed" id="feed" tabindex="0" aria-label="Session activity"><div class="welcome"><img src="/icon.svg" width="52" height="52" alt=""><h2>No sessions yet</h2><button class="primary" id="welcome-new">Start a session</button><button class="text-button" id="welcome-tools">Shared tools</button></div></div>
         <button class="follow-button" id="follow" hidden>↓ New activity</button>
         <form class="composer" id="composer" hidden><textarea id="reply" rows="2" placeholder="Continue the conversation…" aria-label="Message to selected agent"></textarea><div class="composer-footer"><span id="reply-hint">⌘ Enter to send</span><button class="primary" id="send" type="submit">Send message <span aria-hidden="true">↗</span></button></div></form>
       </div>
       <div class="terminal-view" id="terminal-view" hidden><div class="terminal-status" id="terminal-status"></div><div class="terminal-mount" id="terminal-mount"></div></div>
     </section>
     <section id="tools-view" class="tools-view" hidden>
-      <div class="page-heading"><div><div class="eyebrow">Available wherever you work</div><h1>Shared tools</h1><p>Connect your harnesses to the same skills and MCP servers.</p></div><button class="primary" id="preview-sync">Review sharing</button></div>
-      <div class="tools-banner"><span class="banner-icon">⇄</span><div><strong>One source. Fewer moving parts.</strong><p>Skills stay linked to their source. MCP definitions are added without replacing your existing settings.</p></div></div>
+      <div class="page-heading"><div><h1>Shared tools</h1></div><button class="primary" id="preview-sync">Review sharing</button></div>
+
       <div class="tools-tabs"><button data-tooltab="skills" class="selected">Skills <span id="skill-count">0</span></button><button data-tooltab="mcp">MCP servers <span id="mcp-count">0</span></button><div class="spacer"></div><button id="refresh-tools">Refresh</button></div>
       <div id="tools-table" class="tools-table"></div>
-      <div id="tools-notes" class="tools-notes"></div>
     </section>
     <footer class="statusbar"><span id="watching">Discovering local sessions…</span><span id="mode-label">Local workspace</span></footer>
   </main>
