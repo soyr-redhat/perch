@@ -54,6 +54,9 @@ def main():
             term = request("/api/spawn", {"harness": "fixture", "cwd": str(root)})["term"]
             term_id = term["id"]
             assert term["alive"]
+            if os.name == "nt":
+                diagnostic = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:PERCH_FIXTURE_PATH) } | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"], env={**os.environ, "PERCH_FIXTURE_PATH": fixture}, capture_output=True, text=True, timeout=10)
+                print("Fixture processes:", diagnostic.stdout, diagnostic.stderr, flush=True)
             with socket.create_connection(("127.0.0.1", info["port"]), timeout=20) as connection:
                 connection.sendall((f'GET /ws/term/{term_id} HTTP/1.1\r\nHost: 127.0.0.1:{info["port"]}\r\nX-Perch-Token: {info["token"]}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n').encode())
                 with connection.makefile("rb") as stream:
