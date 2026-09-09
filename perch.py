@@ -35,7 +35,7 @@ def run_app(url, httpd):
         height=cfg["window"]["height"],
         min_size=(860, 580),
         text_select=True,
-        background_color="#1b2232",
+        background_color="#242a2e",
     )
 
     def action(name):

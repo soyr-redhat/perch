@@ -38,7 +38,7 @@ function setTheme(mode) {
   document.documentElement.dataset.theme=mode==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):mode;
   for(const t of state.terms.values()) t.term.options.theme=termTheme();
 }
-function termTheme() {const dark=document.documentElement.dataset.theme==='dark';return {background:dark?'#161d2b':'#1b2232',foreground:'#e4eaf5',cursor:'#91adff',selectionBackground:'#4361be66'};}
+function termTheme() {const dark=document.documentElement.dataset.theme==='dark';return {background:dark?'#1e2628':'#242a2e',foreground:'#e7ecea',cursor:'#9bbfaa',selectionBackground:'#628f7666'};}
 function connection(on) {
   state.connected=on; $('#connection-dot').className='status-dot '+(on?'connected':'offline');
   $('#connection-text').textContent=on?'Connected':'Connection interrupted'; $('#retry').hidden=on;
