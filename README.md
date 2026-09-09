@@ -58,4 +58,6 @@ python -m PyInstaller packaging/perch.spec --noconfirm
 
 Build on the target OS. macOS produces `dist/Perch.app`. Windows produces `dist/Perch/Perch.exe`; compile `packaging/windows.iss` with Inno Setup to make the per-user installer. Public macOS distribution needs Developer ID signing and notarization; Windows release signing is likewise separate from the development build.
 
+See [pre-merge verification](docs/VALIDATION.md) for exercised workflows, audit fixes, and remaining platform acceptance checks.
+
 The local transport requires a per-launch token, checks Host and Origin, and binds only to loopback. The desktop bootstrap handles authentication automatically. Perch owns and stops only the agent processes it starts. Session status is inferred from recorded activity, not a guaranteed real-time view of an external process's internal state.
