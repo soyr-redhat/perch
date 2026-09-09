@@ -3,6 +3,7 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const folder = (p) => p?.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'Other sessions';
+const activityLabel = s => ({working:'Active',waiting:'Idle',quiet:'Recent'}[s]||'Status unavailable');
 const names = {claude:'Claude Code',codex:'Codex',omp:'omp','claude-desktop':'Claude Desktop','codex-legacy':'Codex (legacy)'};
 const state = {snap:null, selected:localStorage.getItem('perch.selected'), filter:'all', search:'', page:'sessions',
   tab:'activity', terms:new Map(), drafts:new Map(), feedKey:'', sidebarKey:'', tabsKey:'', history:null, historyRequest:0, scrub:null,
@@ -72,7 +73,7 @@ function renderSidebar() {
   for(const [cwd,items] of groups){
     const heading=document.createElement('div');heading.className='project-group';heading.innerHTML=`<span aria-hidden="true">▱</span> ${esc(folder(cwd))}<span>${items.length}</span>`;heading.title=cwd;fragment.append(heading);
     for(const a of items){let row=existing.get(a.id)||document.createElement('button');row.className='session-row';row.dataset.agent=a.id;row.setAttribute('aria-current',String(a.id===state.selected&&state.page==='sessions'));row.title=a.title;
-      const html=`<div class="row-top"><span class="status-dot ${esc(a.state)}" aria-label="${esc(a.state)}"></span><span class="row-title">${esc(a.title)}</span></div><div class="row-bottom"><span class="harness-mark">${esc(harness(a.harness).name)}</span><span>${esc(a.state)}</span><span class="time" data-time="${esc(a.updated||a.mtime)}">${ago(a.updated||a.mtime)}</span></div>`;
+      const html=`<div class="row-top"><span class="status-dot ${esc(a.state)}" aria-label="${esc(activityLabel(a.state))}"></span><span class="row-title">${esc(a.title)}</span></div><div class="row-bottom"><span class="harness-mark">${esc(harness(a.harness).name)}</span><span>${esc(activityLabel(a.state))}</span><span class="time" data-time="${esc(a.updated||a.mtime)}">${ago(a.updated||a.mtime)}</span></div>`;
       if(row.dataset.content!==html){row.innerHTML=html;row.dataset.content=html;}fragment.append(row);
     }
   }
@@ -97,7 +98,7 @@ function renderSession() {
   const a=selected();$('#project-label').textContent=a?folder(a.cwd):'Your workspace';
   $('#session-title').textContent=a?.title||'No session selected';
   $('#harness-label').textContent=a?harness(a.harness).name:'Sessions';
-  $('#session-meta').innerHTML=a?`<span><i class="status-dot ${esc(a.state)}"></i>${esc(a.state==='quiet'?'Recent session':a.state==='working'?'Working':'Waiting for input')}</span>${a.model?`<span>${esc(a.model)}</span>`:''}${a.tokens?`<span>${new Intl.NumberFormat('en',{notation:'compact'}).format(a.tokens)} tokens</span>`:''}<span title="${esc(a.cwd)}">${esc(a.cwd||'No project folder')}</span>`:'';
+  $('#session-meta').innerHTML=a?`<span><i class="status-dot ${esc(a.state)}"></i>${esc(activityLabel(a.state))}</span>${a.model?`<span>${esc(a.model)}</span>`:''}${a.tokens?`<span>${new Intl.NumberFormat('en',{notation:'compact'}).format(a.tokens)} tokens</span>`:''}<span title="${esc(a.cwd)}">${esc(a.cwd||'No project folder')}</span>`:'';
   const h=a&&harness(a.harness);
   const actionKey=JSON.stringify([a?.id,h?.canResume]);
   if($('#session-actions').dataset.key!==actionKey){$('#session-actions').dataset.key=actionKey;$('#session-actions').innerHTML=a?`${h.canResume?'<button id="resume-session">Open terminal</button>':''}<button id="handoff-session">Handoff…</button>`:'';}
