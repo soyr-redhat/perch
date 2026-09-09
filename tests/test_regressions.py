@@ -245,6 +245,14 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/snapshot", auth=False)[0], 401)
         self.assertEqual(self.request("/api/snapshot")[0], 200)
 
+    def test_bridge_eval_is_limited_to_native_mode(self):
+        for native in (False, True):
+            self.server.native_bridge = native
+            with urllib.request.urlopen(self.url + "/", timeout=3) as response:
+                policy = response.headers["Content-Security-Policy"]
+                self.assertEqual("'unsafe-eval'" in policy, native)
+                self.assertIn("script-src 'self'", policy)
+
     def test_non_ascii_token_is_rejected_without_closing_connection(self):
         self.assertEqual(self.request("/api/snapshot", headers={"X-Perch-Token": "é"})[0], 401)
         self.assertEqual(self.request("/?token=%C3%A9")[0], 200)

@@ -21,6 +21,9 @@ def run_app(url, httpd):
     from webview.menu import Menu, MenuAction, MenuSeparator
 
     cfg = settings.load()
+    # pywebview builds its API with Function() and uses eval for bridge replies.
+    # Enable this only for the native window, before its first navigation.
+    httpd.native_bridge = True
 
     class Bridge:
         def pick_folder(self):

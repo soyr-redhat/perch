@@ -212,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:*; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self'" + (" 'unsafe-eval'" if getattr(self.server, "native_bridge", False) else "") + "; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:*; frame-ancestors 'none'",
         )
         self.end_headers()
         self.wfile.write(body)
