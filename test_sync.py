@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import sync
 
@@ -20,6 +21,13 @@ def make_skill(root, name):
 
 
 class SkillsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = patch.object(sync, "MANIFEST", os.path.join(self.tmp.name, "manifest.json"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_union_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             claude = os.path.join(tmp, "claude")
@@ -55,13 +63,19 @@ class McpTest(unittest.TestCase):
             with open(claude, "w") as fh:
                 json.dump({"mcpServers": {}, "other": "keep me"}, fh)
             with open(codex, "w") as fh:
-                fh.write('[projects.foo]\ntrust_level = "trusted"\n\n'
-                         '[mcp_servers.github]\ncommand = "docker"\nargs = ["run", "gh-mcp"]\n\n'
-                         '[mcp_servers.github.env]\nTOKEN = "abc"\n\n'
-                         '[windows]\nsandbox = "elevated"\n')
+                fh.write(
+                    '[projects.foo]\ntrust_level = "trusted"\n\n'
+                    '[mcp_servers.github]\ncommand = "docker"\nargs = ["run", "gh-mcp"]\n\n'
+                    '[mcp_servers.github.env]\nTOKEN = "abc"\n\n'
+                    '[windows]\nsandbox = "elevated"\n'
+                )
 
-            paths = {"claude": claude, "claude_mcpjson": os.path.join(tmp, "nope.json"),
-                     "codex": codex, "omp": omp}
+            paths = {
+                "claude": claude,
+                "claude_mcpjson": os.path.join(tmp, "nope.json"),
+                "codex": codex,
+                "omp": omp,
+            }
             report = sync.sync_mcp(paths=paths)
 
             self.assertEqual(report["found"], 1)
@@ -77,6 +91,7 @@ class McpTest(unittest.TestCase):
 
             # codex toml still parses, non-mcp sections intact, no dup server
             import tomllib
+
             with open(codex, "rb") as fh:
                 tdoc = tomllib.load(fh)
             self.assertEqual(tdoc["windows"]["sandbox"], "elevated")
@@ -93,8 +108,10 @@ class McpTest(unittest.TestCase):
             self.assertEqual(again["added"], {})
 
     def test_strip_mcp_sections(self):
-        text = ('[projects.a]\nx = 1\n\n[mcp_servers.one]\ncommand = "c"\n\n'
-                '[mcp_servers.one.env]\nK = "v"\n\n[windows]\ny = 2\n')
+        text = (
+            '[projects.a]\nx = 1\n\n[mcp_servers.one]\ncommand = "c"\n\n'
+            '[mcp_servers.one.env]\nK = "v"\n\n[windows]\ny = 2\n'
+        )
         stripped = sync._strip_mcp_sections(text)
         self.assertIn("[projects.a]", stripped)
         self.assertIn("[windows]", stripped)

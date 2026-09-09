@@ -1,183 +1,379 @@
-"""Perch sync: make every harness see the same skills and MCP servers.
+"""Previewable, additive sharing of skill directories and MCP definitions.
 
-Skills: omp already aggregates every harness's skills on its own; Claude and
-Codex do not. Sync closes the gap by linking each harness's skills into the
-others' user skill directories (junction on Windows, symlink elsewhere), so
-`<name>/SKILL.md` resolves identically everywhere. Links Perch creates are
-recorded in ~/.perch/sync-manifest.json.
-
-MCP: builds the union of stdio/http server definitions across
-~/.claude.json, ~/.claude/mcp.json, ~/.codex/config.toml and
-~/.omp/agent/mcp.json, then writes the missing entries back in each file's
-own format. Files are backed up (<file>.perch-bak, once) before any write.
+Existing definitions are never rewritten. Ambiguous or lossy translations are
+blocked, not guessed. CLI and desktop use exactly the same plan/apply engine.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
-import shutil
 import subprocess
 import time
+import tomlkit
 
-PERCH_DIR = os.path.expanduser("~/.perch")
-MANIFEST = os.path.join(PERCH_DIR, "sync-manifest.json")
+from storage import DATA_DIR, atomic_write, sync_lock, write_json
 
+PERCH_DIR = str(DATA_DIR)
+MANIFEST = str(DATA_DIR / "sync-manifest.json")
 SKILL_ROOTS = {
     "claude": "~/.claude/skills",
-    "codex": "~/.codex/skills",
-    "omp": "~/.omp/skills",
-    "agents": "~/.agents/skills",
+    "codex": "~/.agents/skills",
+    "codex-legacy": "~/.codex/skills",
+    "omp": "~/.omp/agent/skills",
 }
-SKILL_TARGETS = ("claude", "codex")  # omp/agents already aggregate the rest
-
+SKILL_TARGETS = ("claude", "codex", "omp")
 MCP_CLAUDE_JSON = os.path.expanduser("~/.claude.json")
 MCP_CLAUDE_MCPJSON = os.path.expanduser("~/.claude/mcp.json")
-MCP_CODEX_TOML = os.path.expanduser("~/.codex/config.toml")
+MCP_CODEX_TOML = str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "config.toml")
 MCP_OMP_JSON = os.path.expanduser("~/.omp/agent/mcp.json")
+MCP_DESKTOP_JSON = str(
+    (
+        Path(os.environ.get("APPDATA", "~")).expanduser() / "Claude"
+        if os.name == "nt"
+        else Path("~/Library/Application Support/Claude").expanduser()
+    )
+    / "claude_desktop_config.json"
+)
+TARGET_NAMES = {
+    "claude": "Claude Code",
+    "codex": "Codex CLI & desktop",
+    "omp": "omp",
+    "claude-desktop": "Claude Desktop",
+}
 
-
-# --------------------------------------------------------------------------
-# skills
 
 def _link_dir(target: str, link: str) -> str:
     try:
-        os.symlink(target, link, target_is_directory=True)
+        os.symlink(os.path.realpath(target), link, target_is_directory=True)
         return "symlink"
     except OSError:
         if os.name != "nt":
             raise
-        # cmd's mklink rejects mixed forward/backward separators
         subprocess.run(
-            ["cmd", "/c", "mklink", "/J", os.path.normpath(link), os.path.normpath(target)],
-            check=True, capture_output=True, creationflags=0x08000000,
+            ["cmd", "/c", "mklink", "/J", os.path.normpath(link), os.path.realpath(target)],
+            check=True,
+            capture_output=True,
+            creationflags=0x08000000,
         )
         return "junction"
 
 
 def _record_links(created: list[dict]) -> None:
-    os.makedirs(PERCH_DIR, exist_ok=True)
-    manifest = {"created": []}
-    if os.path.isfile(MANIFEST):
-        try:
-            with open(MANIFEST, "r", encoding="utf-8") as fh:
-                manifest = json.load(fh)
-        except (OSError, json.JSONDecodeError):
-            pass
-    manifest.setdefault("created", []).extend(created)
-    with open(MANIFEST, "w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=1)
+    doc = {"created": []}
+    if Path(MANIFEST).exists():
+        doc = json.loads(Path(MANIFEST).read_text(encoding="utf-8"))
+        if not isinstance(doc, dict) or not isinstance(doc.get("created"), list):
+            raise ValueError("Invalid Perch sync manifest")
+    doc["created"].extend(created)
+    write_json(MANIFEST, doc)
 
 
-def sync_skills(roots: dict | None = None, targets: tuple = SKILL_TARGETS) -> dict:
-    roots = roots or {h: os.path.expanduser(p) for h, p in SKILL_ROOTS.items()}
-    found: dict[str, tuple[str, str]] = {}
-    conflicts = []
-
+def skill_inventory(roots=None) -> list:
+    roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
+    skills = {}
     for harness, root in roots.items():
-        if not os.path.isdir(root):
+        if not Path(root).is_dir():
             continue
-        for entry in sorted(os.listdir(root)):
-            full = os.path.join(root, entry)
-            if entry.startswith(".") or not os.path.isdir(full):
+        for folder in sorted(Path(root).iterdir()):
+            if folder.name.startswith(".") or not (folder / "SKILL.md").is_file():
                 continue
-            if not os.path.isfile(os.path.join(full, "SKILL.md")):
-                continue
-            if entry in found:
-                if os.path.realpath(found[entry][1]) != os.path.realpath(full):
-                    conflicts.append({"skill": entry, "kept": found[entry][0], "dropped": harness})
-            else:
-                found[entry] = (harness, full)
+            item = skills.setdefault(folder.name, {"name": folder.name, "origins": {}, "presentIn": []})
+            item["origins"][harness] = str(folder.resolve())
+            item["presentIn"].append(harness)
+    return sorted(skills.values(), key=lambda x: x["name"].casefold())
 
-    linked, present, created = [], [], []
-    for target_h in targets:
-        root = roots[target_h]
-        os.makedirs(root, exist_ok=True)
-        for name, (origin, path) in found.items():
-            if origin == target_h:
+
+def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
+    roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
+    inventory = skill_inventory(roots)
+    report = {"linked": [], "present": [], "conflicts": [], "errors": [], "total": len(inventory)}
+    created = []
+    for skill in inventory:
+        origins = skill["origins"]
+        variants = set(origins.values())
+        if len(variants) > 1:
+            report["conflicts"].append(
+                {"skill": skill["name"], "reason": "Different source directories; choose one before sharing"}
+            )
+            continue
+        source = next(iter(variants))
+        for target in targets:
+            if target not in roots:  # Claude Desktop does not have this skills-directory contract.
                 continue
-            link = os.path.join(root, name)
-            if os.path.lexists(link):
-                if os.path.realpath(link) == os.path.realpath(path):
-                    present.append({"skill": name, "into": target_h})
+            dest = Path(roots[target]) / skill["name"]
+            if os.path.lexists(dest):
+                if os.path.realpath(dest) == source:
+                    if os.path.join(os.path.realpath(dest.parent), dest.name) != source:
+                        report["present"].append({"skill": skill["name"], "into": target})
                 else:
-                    conflicts.append({"skill": name, "kept": target_h, "dropped": origin})
+                    report["conflicts"].append(
+                        {"skill": skill["name"], "into": target, "reason": "Destination already exists"}
+                    )
                 continue
-            kind = _link_dir(path, link)
-            linked.append({"skill": name, "into": target_h, "kind": kind})
-            created.append({"link": link, "target": path, "kind": kind, "ts": time.time()})
-
+            entry = {"skill": skill["name"], "into": target, "kind": "link"}
+            try:
+                if not dry_run:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    entry["kind"] = _link_dir(source, str(dest))
+                    created.append(
+                        {"link": str(dest), "target": source, "kind": entry["kind"], "ts": time.time()}
+                    )
+                report["linked"].append(entry)
+            except OSError as exc:
+                report["errors"].append({"skill": skill["name"], "into": target, "reason": str(exc)})
     if created:
         _record_links(created)
-    return {"linked": linked, "present": present, "conflicts": conflicts, "total": len(found)}
+    return report
 
 
-# --------------------------------------------------------------------------
-# mcp
+def _paths(paths=None):
+    result = {
+        "claude": MCP_CLAUDE_JSON,
+        "claude_mcpjson": MCP_CLAUDE_MCPJSON,
+        "codex": MCP_CODEX_TOML,
+        "omp": MCP_OMP_JSON,
+        "claude-desktop": MCP_DESKTOP_JSON,
+    }
+    if paths is not None:
+        root = Path(next(iter(paths.values()))).parent if paths else Path(PERCH_DIR)
+        result = {key: str(root / (".missing-" + key)) for key in result}
+    result.update(paths or {})
+    return result
 
-def _norm_server(cfg) -> dict | None:
-    """Normalize one server definition to {command|url, ...} or None."""
-    if not isinstance(cfg, dict) or cfg.get("enabled") is False:
+
+def _load(path, toml=False):
+    p = Path(path)
+    raw = p.read_bytes() if p.exists() else b""
+    doc = (
+        (tomlkit.parse(raw.decode("utf-8")) if toml else json.loads(raw))
+        if raw.strip()
+        else (tomlkit.document() if toml else {})
+    )
+    if not isinstance(doc, dict):
+        raise ValueError("Configuration must be an object")
+    key = "mcp_servers" if toml else "mcpServers"
+    servers = doc.get(key, {})
+    if not isinstance(servers, dict):
+        raise ValueError(f"{key} must be an object")
+    return raw, doc, servers
+
+
+def _norm_server(cfg, source=""):
+    if not isinstance(cfg, dict) or cfg.get("enabled") is False or cfg.get("disabled") is True:
         return None
+    if bool(cfg.get("command")) == bool(cfg.get("url")):
+        raise ValueError("Expected exactly one command or URL")
+    allowed = {"command", "args", "env", "url", "type", "headers", "http_headers", "enabled", "disabled"}
+    unsupported = sorted(set(cfg) - allowed)
+    if unsupported:
+        raise ValueError("Client-specific fields need review: " + ", ".join(unsupported))
     if cfg.get("command"):
+        if not isinstance(cfg["command"], str):
+            raise ValueError("Command must be text")
         out = {"command": cfg["command"]}
-        if isinstance(cfg.get("args"), list):
-            out["args"] = [str(a) for a in cfg["args"]]
-        if isinstance(cfg.get("env"), dict):
-            out["env"] = {str(k): str(v) for k, v in cfg["env"].items()}
-        if isinstance(cfg.get("cwd"), str):
-            out["cwd"] = cfg["cwd"]
-        return out
-    if cfg.get("url"):
+        if "args" in cfg:
+            if not isinstance(cfg["args"], list) or not all(isinstance(a, str) for a in cfg["args"]):
+                raise ValueError("Arguments must be a list of strings")
+            out["args"] = list(cfg["args"])
+        if "env" in cfg:
+            if not isinstance(cfg["env"], dict) or not all(isinstance(v, str) for v in cfg["env"].values()):
+                raise ValueError("Environment must contain string values")
+            out["env"] = dict(cfg["env"])
+        if cfg.get("type", "stdio") != "stdio":
+            raise ValueError("Command transport must be stdio")
+    else:
+        if not isinstance(cfg["url"], str) or not cfg["url"].startswith(("https://", "http://")):
+            raise ValueError("Expected an HTTP or HTTPS URL")
+        transport = cfg.get("type", "http")
+        if transport not in ("http", "streamable-http"):
+            raise ValueError(f"{transport} transport is not portable to every target")
         out = {"url": cfg["url"]}
-        if isinstance(cfg.get("headers"), dict):
-            out["headers"] = {str(k): str(v) for k, v in cfg["headers"].items()}
-        return out
-    return None
+        headers = cfg.get("http_headers", cfg.get("headers"))
+        if headers is not None:
+            if not isinstance(headers, dict) or not all(isinstance(v, str) for v in headers.values()):
+                raise ValueError("Headers must contain string values")
+            out["headers"] = dict(headers)
+    # Expansion conventions are not the same between clients. Never resolve secrets here.
+    if "${" in json.dumps(out):
+        raise ValueError("Environment substitutions need a target-specific configuration")
+    return out
 
 
-def _backup(path: str) -> None:
-    bak = path + ".perch-bak"
-    if os.path.isfile(path) and not os.path.isfile(bak):
-        shutil.copy2(path, bak)
+def _encode(cfg, target):
+    result = dict(cfg)
+    if "url" in result:
+        if target == "claude-desktop":
+            raise ValueError("Remote servers use Claude Desktop connectors; sign in within that application")
+        if target == "codex":
+            if "headers" in result:
+                result["http_headers"] = result.pop("headers")
+        else:
+            result["type"] = "http"
+    return result
 
 
-def _write_json_atomic(path: str, doc: dict) -> None:
-    _backup(path)
-    tmp = path + ".perch-tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, path)
+def _backup(path):
+    p = Path(path)
+    if p.exists():
+        backup = p.with_name(p.name + f".perch-{time.time_ns()}.bak")
+        atomic_write(backup, p.read_text(encoding="utf-8"))
 
 
-def _json_servers(path: str) -> dict:
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
-        return doc.get("mcpServers") or {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False) -> dict:
+    paths = _paths(paths)
+    report = {"found": 0, "sources": {}, "added": {}, "conflicts": [], "blocked": [], "errors": []}
+    loaded, union, ambiguous, unavailable = {}, {}, set(), set()
+    for source, path in paths.items():
+        # Custom fixture callers can omit desktop without accessing real desktop configuration.
+        try:
+            raw, doc, servers = _load(path, source == "codex")
+            loaded[source] = (raw, doc, servers)
+            report["sources"][source] = len(servers)
+            for name, cfg in servers.items():
+                try:
+                    norm = _norm_server(cfg, source)
+                    if norm is None:
+                        continue
+                except ValueError as exc:
+                    unavailable.add(name)
+                    report["blocked"].append({"server": name, "source": source, "reason": str(exc)})
+                    continue
+                if name in union and union[name] != norm:
+                    ambiguous.add(name)
+                else:
+                    union[name] = norm
+        except (ValueError, OSError) as exc:
+            report["errors"].append(
+                {"source": source, "reason": f"Cannot read {Path(path).name}: {type(exc).__name__}"}
+            )
+    for name in sorted(ambiguous):
+        report["conflicts"].append(
+            {"server": name, "reason": "Different definitions; existing versions preserved"}
+        )
+    report["found"] = len(union)
+    for target in targets:
+        if target not in loaded or target not in TARGET_NAMES:
+            continue
+        raw, doc, existing = loaded[target]
+        additions = {}
+        for name, cfg in union.items():
+            if name in existing or name in ambiguous or name in unavailable:
+                continue
+            try:
+                additions[name] = _encode(cfg, target)
+            except ValueError as exc:
+                report["blocked"].append({"server": name, "into": target, "reason": str(exc)})
+        if not additions:
+            continue
+        if not dry_run:
+            try:
+                if target == "omp" and not raw:
+                    doc["$schema"] = (
+                        "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json"
+                    )
+                key = "mcp_servers" if target == "codex" else "mcpServers"
+                if key not in doc:
+                    doc[key] = tomlkit.table() if target == "codex" else {}
+                for name, cfg in additions.items():
+                    doc[key][name] = cfg
+                text = tomlkit.dumps(doc) if target == "codex" else json.dumps(doc, indent=2) + "\n"
+                # Validate the final document before touching disk.
+                (tomlkit.parse if target == "codex" else json.loads)(text)
+                _backup(paths[target])
+                atomic_write(paths[target], text, expected=raw)
+            except (ValueError, OSError) as exc:
+                report["errors"].append({"source": target, "reason": str(exc)})
+                continue
+        report["added"][target] = sorted(additions)
+    return report
 
 
-_MCP_SECTION = re.compile(r'^\s*\[\s*mcp_servers(\..*)?\]\s*$', re.IGNORECASE)
+def mcp_overview(paths=None):
+    servers = {}
+    for source, path in _paths(paths).items():
+        try:
+            _, _, definitions = _load(path, source == "codex")
+        except (OSError, ValueError):
+            continue
+        for name, cfg in definitions.items():
+            if not isinstance(cfg, dict):
+                continue
+            item = servers.setdefault(
+                name,
+                {
+                    "name": name,
+                    "transport": "HTTP" if cfg.get("url") else "stdio",
+                    "origin": source,
+                    "presentIn": [],
+                    "disabledIn": [],
+                },
+            )
+            item["presentIn"].append(source)
+            if cfg.get("enabled") is False or cfg.get("disabled") is True:
+                item["disabledIn"].append(source)
+    return sorted(servers.values(), key=lambda x: x["name"].casefold())
 
 
-def _codex_servers(path: str) -> dict:
-    import tomllib
-    try:
-        with open(path, "rb") as fh:
-            doc = tomllib.load(fh)
-        return doc.get("mcp_servers") or {}
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
+def fingerprint():
+    digest = hashlib.sha256()
+    for path in _paths().values():
+        p = Path(path)
+        digest.update(str(p).encode())
+        digest.update(p.read_bytes() if p.is_file() else b"")
+    for item in skill_inventory():
+        digest.update(json.dumps(item, sort_keys=True).encode())
+        for root in set(item["origins"].values()):
+            p = Path(root) / "SKILL.md"
+            digest.update(p.read_bytes())
+    return digest.hexdigest()
 
 
-def _strip_mcp_sections(text: str) -> str:
+def sync_all(skills=True, mcp=True, targets=SKILL_TARGETS, dry_run=False, revision=None):
+    targets = tuple(t for t in targets if t in TARGET_NAMES)
+    with sync_lock(PERCH_DIR):
+        before = fingerprint()
+        plan_id = hashlib.sha256((before + json.dumps([skills, mcp, targets])).encode()).hexdigest()
+        if revision is not None and revision != plan_id:
+            raise ValueError("Tools or sharing preferences changed. Preview again before applying.")
+        report = {
+            "skills": sync_skills(targets=targets, dry_run=dry_run)
+            if skills
+            else {"linked": [], "conflicts": [], "errors": [], "total": 0},
+            "mcp": sync_mcp(targets=targets, dry_run=dry_run)
+            if mcp
+            else {"found": 0, "added": {}, "conflicts": [], "blocked": [], "errors": []},
+            "dryRun": dry_run,
+            "revision": plan_id,
+            "ts": time.time(),
+        }
+        if not dry_run:
+            write_json(Path(PERCH_DIR) / "last-sync.json", report)
+        return report
+
+
+def overview():
+    return {
+        "skills": skill_inventory(),
+        "mcp": mcp_overview(),
+        "targets": [{"id": k, "name": v, "skills": k != "claude-desktop"} for k, v in TARGET_NAMES.items()],
+        "notes": [
+            "Codex CLI and desktop share their user configuration.",
+            "Skill links share edits immediately. Restart a harness if it does not refresh tools.",
+            "OAuth sign-ins, plugin installations, hooks and custom agents remain owned by each harness.",
+            "Custom tool commands are transferable when packaged as stdio MCP servers.",
+        ],
+    }
+
+
+def _strip_mcp_sections(text):
+    """Legacy helper retained for callers; never used by the sharing engine."""
     out, skipping = [], False
     for line in text.splitlines():
-        if _MCP_SECTION.match(line):
+        if re.match(r"^\s*\[\s*mcp_servers(?:\..*)?\]\s*$", line):
             skipping = True
             continue
         if skipping and re.match(r"^\s*\[", line):
@@ -185,159 +381,3 @@ def _strip_mcp_sections(text: str) -> str:
         if not skipping:
             out.append(line)
     return "\n".join(out).rstrip() + "\n"
-
-
-def _toml_str(s: str) -> str:
-    return json.dumps(s)  # a JSON string is a valid TOML basic string
-
-
-def _toml_key(name: str) -> str:
-    return name if re.match(r"^[A-Za-z0-9_-]+$", name) else _toml_str(name)
-
-
-def _render_codex(servers: dict) -> str:
-    blocks = []
-    for name, cfg in servers.items():
-        lines = [f"[mcp_servers.{_toml_key(name)}]"]
-        if "command" in cfg:
-            lines.append(f"command = {_toml_str(cfg['command'])}")
-            if cfg.get("args"):
-                lines.append("args = [" + ", ".join(_toml_str(a) for a in cfg["args"]) + "]")
-            if cfg.get("cwd"):
-                lines.append(f"cwd = {_toml_str(cfg['cwd'])}")
-            if cfg.get("env"):
-                lines.append("")
-                lines.append(f"[mcp_servers.{_toml_key(name)}.env]")
-                for k, v in cfg["env"].items():
-                    lines.append(f"{k} = {_toml_str(v)}")
-        else:
-            lines.append(f"url = {_toml_str(cfg['url'])}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks) + ("\n" if blocks else "")
-
-
-def sync_mcp(paths: dict | None = None) -> dict:
-    paths = paths or {}
-    sources = [
-        ("claude", paths.get("claude", MCP_CLAUDE_JSON), _json_servers),
-        ("claude-mcpjson", paths.get("claude_mcpjson", MCP_CLAUDE_MCPJSON), _json_servers),
-        ("codex", paths.get("codex", MCP_CODEX_TOML), _codex_servers),
-        ("omp", paths.get("omp", MCP_OMP_JSON), _json_servers),
-    ]
-
-    union: dict[str, dict] = {}
-    origin: dict[str, str] = {}
-    conflicts = []
-    counts = {}
-    for name, path, reader in sources:
-        raw = reader(path)
-        counts[name] = len(raw)
-        for srv_name, cfg in raw.items():
-            norm = _norm_server(cfg)
-            if norm is None:
-                continue
-            if srv_name in union:
-                if union[srv_name] != norm:
-                    conflicts.append({"server": srv_name, "kept": origin[srv_name], "dropped": name})
-            else:
-                union[srv_name] = norm
-                origin[srv_name] = name
-
-    report = {"found": len(union), "sources": counts, "added": {}, "conflicts": conflicts}
-    if not union:
-        return report
-
-    def missing(existing: dict) -> dict:
-        return {n: c for n, c in union.items() if n not in existing}
-
-    # claude user scope: top-level mcpServers in the claude state file
-    claude_path = paths.get("claude", MCP_CLAUDE_JSON)
-    if os.path.isfile(claude_path):
-        try:
-            with open(claude_path, "r", encoding="utf-8") as fh:
-                doc = json.load(fh)
-        except json.JSONDecodeError:
-            doc = None
-        if doc is not None:
-            servers = doc.setdefault("mcpServers", {})
-            add = missing(servers)
-            if add:
-                for n, c in add.items():
-                    servers[n] = ({"type": "http", **c} if "url" in c else c)
-                _write_json_atomic(claude_path, doc)
-                report["added"]["claude"] = sorted(add)
-
-    # codex: config.toml [mcp_servers.*]
-    codex_path = paths.get("codex", MCP_CODEX_TOML)
-    if os.path.isfile(codex_path):
-        existing = _codex_servers(codex_path)
-        add = missing(existing)
-        if add:
-            with open(codex_path, "r", encoding="utf-8") as fh:
-                text = _strip_mcp_sections(fh.read())
-            merged = {**existing, **add}
-            _backup(codex_path)
-            with open(codex_path, "w", encoding="utf-8") as fh:
-                fh.write(text + "\n" + _render_codex(merged))
-            report["added"]["codex"] = sorted(add)
-
-    # omp: agent/mcp.json (created if missing)
-    omp_path = paths.get("omp", MCP_OMP_JSON)
-    os.makedirs(os.path.dirname(omp_path), exist_ok=True)
-    try:
-        with open(omp_path, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        doc = {"$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json"}
-    servers = doc.setdefault("mcpServers", {})
-    add = missing(servers)
-    if add:
-        for n, c in add.items():
-            servers[n] = ({"type": "http", **c} if "url" in c else c)
-        _write_json_atomic(omp_path, doc)
-        report["added"]["omp"] = sorted(add)
-
-    return report
-
-
-def mcp_overview() -> list:
-    """The MCP union as the settings UI shows it: name, transport, origin, reach."""
-    sources = [
-        ("claude", MCP_CLAUDE_JSON, _json_servers),
-        ("claude-mcpjson", MCP_CLAUDE_MCPJSON, _json_servers),
-        ("codex", MCP_CODEX_TOML, _codex_servers),
-        ("omp", MCP_OMP_JSON, _json_servers),
-    ]
-    servers: dict[str, dict] = {}
-    for src, path, reader in sources:
-        for name, cfg in reader(path).items():
-            norm = _norm_server(cfg)
-            if norm is None:
-                continue
-            entry = servers.setdefault(name, {
-                "name": name,
-                "transport": "http" if "url" in norm else "stdio",
-                "origin": src,
-                "presentIn": [],
-            })
-            entry["presentIn"].append(src)
-    return sorted(servers.values(), key=lambda e: e["name"])
-
-
-def sync_all(skills: bool = True, mcp: bool = True, targets: tuple = SKILL_TARGETS) -> dict:
-    report = {
-        "skills": sync_skills(targets=targets) if skills else {"linked": [], "present": [], "conflicts": [], "total": 0},
-        "mcp": sync_mcp() if mcp else {"found": 0, "sources": {}, "added": {}, "conflicts": []},
-        "ts": time.time(),
-    }
-    try:
-        os.makedirs(PERCH_DIR, exist_ok=True)
-        with open(os.path.join(PERCH_DIR, "last-sync.json"), "w", encoding="utf-8") as fh:
-            json.dump(report, fh, indent=1)
-    except OSError:
-        pass
-    return report
-
-
-if __name__ == "__main__":
-    print(json.dumps(sync_all(), indent=1))

@@ -14,9 +14,36 @@ import subprocess
 import threading
 import time
 import uuid
+import signal
 
 IS_WIN = platform.system() == "Windows"
 BACKLOG_CAP = 96 * 1024
+
+
+def terminate_process(proc, timeout=2):
+    """Stop a Perch-owned process tree and reap its leader."""
+    if proc.poll() is not None:
+        return
+    try:
+        if IS_WIN:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=timeout,
+                creationflags=0x08000000,
+            )
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            if IS_WIN:
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 class Pty:
@@ -24,6 +51,7 @@ class Pty:
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
         if IS_WIN:
             from winpty import PtyProcess
+
             self._p = PtyProcess.spawn(argv, cwd=cwd or None, dimensions=(rows, cols), env=env)
             self._kind = "win"
         else:
@@ -31,10 +59,19 @@ class Pty:
             import pty
             import struct
             import termios
+
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-            self._p = subprocess.Popen(argv, cwd=cwd or None, env=env,
-                                       stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+            self._p = subprocess.Popen(
+                argv,
+                cwd=cwd or None,
+                env=env,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                close_fds=True,
+                start_new_session=True,
+            )
             os.close(slave)
             self._m = master
             self._kind = "posix"
@@ -42,15 +79,18 @@ class Pty:
     def read(self) -> bytes:
         if self._kind == "win":
             return self._p.read().encode("utf-8", "replace")
-        return os.read(self._m, 65536)
+        return os.read(self._m, 16384)
 
     def write(self, data: bytes) -> None:
         if self._kind == "win":
             self._p.write(data.decode("utf-8", "replace"))
         else:
-            os.write(self._m, data)
+            while data:
+                written = os.write(self._m, data)
+                data = data[written:]
 
     def resize(self, cols: int, rows: int) -> None:
+        cols, rows = max(2, min(cols, 500)), max(2, min(rows, 300))
         try:
             if self._kind == "win":
                 self._p.setwinsize(rows, cols)
@@ -58,6 +98,7 @@ class Pty:
                 import fcntl
                 import struct
                 import termios
+
                 fcntl.ioctl(self._m, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         except Exception:
             pass
@@ -70,11 +111,23 @@ class Pty:
             return None if self.alive() else getattr(self._p, "exitstatus", None)
         return self._p.poll()
 
+    def close(self):
+        if self._kind == "posix" and self._m is not None:
+            try:
+                os.close(self._m)
+            except OSError:
+                pass
+            self._m = None
+
     def kill(self) -> None:
-        try:
-            self._p.terminate()
-        except Exception:
-            pass
+        if self._kind == "win":
+            try:
+                self._p.terminate(force=True)
+            except OSError:
+                pass
+        else:
+            terminate_process(self._p)
+        self.close()
 
 
 class TermSession:
@@ -102,24 +155,33 @@ class TermSession:
                 with self._lock:
                     self._backlog.extend(chunk)
                     if len(self._backlog) > BACKLOG_CAP:
-                        del self._backlog[: -BACKLOG_CAP]
+                        del self._backlog[:-BACKLOG_CAP]
                     subs = list(self._subs)
                 for q in subs:
                     try:
                         q.put_nowait(chunk)
                     except queue.Full:
-                        pass
+                        # Terminal output cannot be dropped: explicitly end the slow stream.
+                        self.unsubscribe(q)
+                        while not q.empty():
+                            try:
+                                q.get_nowait()
+                            except queue.Empty:
+                                break
+                        q.put_nowait(None)
         except (EOFError, OSError):
             pass
         finally:
             self.died_at = time.time()
+            self.pty.close()
             with self._lock:
                 subs = list(self._subs)
             for q in subs:
                 try:
                     q.put_nowait(None)  # EOF sentinel
                 except queue.Full:
-                    pass
+                    q.get_nowait()
+                    q.put_nowait(None)
 
     def subscribe(self) -> queue.Queue:
         """New subscriber: backlog replay is queued before live chunks."""
@@ -194,3 +256,10 @@ class TermRegistry:
         with self._lock:
             terms = list(self._terms.values())
         return [t.info() for t in terms]
+
+    def shutdown(self):
+        with self._lock:
+            terms = list(self._terms.values())
+            self._terms.clear()
+        for term in terms:
+            term.kill()

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perch-workspace"
+version = "0.2.0"
+description = "A desktop workspace for coding agents and shared tools"
+requires-python = ">=3.11"
+dependencies = ["pywebview>=6.2,<7", "tomlkit>=0.13,<1", "watchdog>=6,<7", "pywinpty>=2,<4; sys_platform == 'win32'"]
+
+[project.optional-dependencies]
+dev = ["pyinstaller>=6.22,<7", "ruff>=0.12,<1"]
+
+[project.scripts]
+perch = "perch:main"
+
+[tool.setuptools]
+py-modules = ["perch", "scanner", "server", "settings", "sync", "term", "storage", "demo"]
+packages = ["desktop", "static"]
+
+[tool.setuptools.package-data]
+static = ["*.html", "*.css", "*.js", "*.svg"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
