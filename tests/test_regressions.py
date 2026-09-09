@@ -218,7 +218,10 @@ class ServerTests(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=3) as r:
                 return r.status, r.read()
         except urllib.error.HTTPError as e:
-            return e.code, e.read()
+            data = e.read()
+            code = e.code
+            e.close()
+            return code, data
 
     def test_auth_required(self):
         self.assertEqual(self.request("/api/snapshot", auth=False)[0], 401)

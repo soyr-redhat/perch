@@ -6,6 +6,7 @@ Run: python -m unittest test_sync -v
 import json
 import os
 import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -84,7 +85,7 @@ class McpTest(unittest.TestCase):
             self.assertNotIn("codex", report.get("added", {}))  # already had it
 
             # claude.json got the server, unrelated keys preserved
-            doc = json.load(open(claude))
+            doc = json.loads(Path(claude).read_text())
             self.assertEqual(doc["other"], "keep me")
             self.assertEqual(doc["mcpServers"]["github"]["command"], "docker")
             self.assertEqual(doc["mcpServers"]["github"]["env"]["TOKEN"], "abc")
@@ -99,7 +100,7 @@ class McpTest(unittest.TestCase):
             self.assertEqual(tdoc["mcp_servers"]["github"]["args"], ["run", "gh-mcp"])
 
             # omp file created with schema + server
-            odoc = json.load(open(omp))
+            odoc = json.loads(Path(omp).read_text())
             self.assertIn("$schema", odoc)
             self.assertEqual(odoc["mcpServers"]["github"]["command"], "docker")
 
