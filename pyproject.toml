@@ -20,7 +20,7 @@ py-modules = ["perch", "scanner", "server", "settings", "sync", "term", "storage
 packages = ["desktop", "static"]
 
 [tool.setuptools.package-data]
-static = ["*.html", "*.css", "*.js", "*.svg"]
+static = ["*.html", "*.css", "*.js", "*.svg", "licenses/*.txt"]
 
 [tool.ruff]
 line-length = 110
