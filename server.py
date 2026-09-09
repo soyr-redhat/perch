@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import secrets
+import socket
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -562,6 +563,10 @@ class Handler(BaseHTTPRequestHandler):
                         return
             finally:
                 stop.set()
+                try:
+                    sock.shutdown(socket.SHUT_RD)
+                except OSError:
+                    pass
 
         threading.Thread(target=writer, daemon=True).start()
         try:

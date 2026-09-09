@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["pywebview>=6.2,<7", "tomlkit>=0.13,<1", "watchdog>=6,<7", "pywinpty>=2,<4; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
-dev = ["pyinstaller>=6.22,<7", "ruff>=0.12,<1"]
+dev = ["pyinstaller>=6.22,<7", "ruff>=0.12,<1", "pillow>=11,<13"]
 
 [project.scripts]
 perch = "perch:main"

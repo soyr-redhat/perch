@@ -62,17 +62,22 @@ class Pty:
 
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-            self._p = subprocess.Popen(
-                argv,
-                cwd=cwd or None,
-                env=env,
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
-                close_fds=True,
-                start_new_session=True,
-            )
-            os.close(slave)
+            try:
+                self._p = subprocess.Popen(
+                    argv,
+                    cwd=cwd or None,
+                    env=env,
+                    stdin=slave,
+                    stdout=slave,
+                    stderr=slave,
+                    close_fds=True,
+                    start_new_session=True,
+                )
+            except Exception:
+                os.close(master)
+                raise
+            finally:
+                os.close(slave)
             self._m = master
             self._kind = "posix"
 
@@ -232,11 +237,14 @@ class TermSession:
 class TermRegistry:
     def __init__(self):
         self._terms: dict[str, TermSession] = {}
+        self._closed = False
         self._lock = threading.Lock()
 
     def spawn(self, harness: str, name: str, color: str, cwd: str, argv: list[str]) -> TermSession:
-        term = TermSession(harness, name, color, cwd, argv)
         with self._lock:
+            if self._closed:
+                raise ValueError("Perch is shutting down")
+            term = TermSession(harness, name, color, cwd, argv)
             self._terms[term.id] = term
         return term
 
@@ -259,6 +267,7 @@ class TermRegistry:
 
     def shutdown(self):
         with self._lock:
+            self._closed = True
             terms = list(self._terms.values())
             self._terms.clear()
         for term in terms:

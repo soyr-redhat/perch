@@ -106,7 +106,7 @@ function renderSession() {
   $('#history-toolbar').hidden=!a;$('#composer').hidden=!a||!h.canMessage;
   $('#send').disabled=!a||state.sending.has(a.id);$('#reply-hint').textContent=a?`Message ${h.name} · ${navigator.platform.includes('Mac')?'⌘':'Ctrl'} Enter`:'⌘ Enter to send';
   if($('#reply').dataset.agent!==a?.id){$('#reply').value=state.drafts.get(a?.id)||'';$('#reply').dataset.agent=a?.id||'';}
-  if(!a)return;
+  if(!a){state.feedKey='';$('#feed').innerHTML='<div class="welcome"><h2>Your workspace is ready.</h2><p>Start a session from the sidebar, or launch an agent in your CLI.</p></div>';return;}
   const hist=state.history?.agent===a.id?state.history:null;
   const promptsKey=JSON.stringify(a.prompts);
   if($('#history').dataset.key!==promptsKey){$('#history').dataset.key=promptsKey;$('#history').innerHTML='<option value="">Jump to a prompt</option>'+a.prompts.map(p=>`<option value="${p.index}">${p.index+1}. ${esc(p.text)}</option>`).join('');}
@@ -192,7 +192,7 @@ $('.filters').onclick=e=>{const button=e.target.closest('[data-filter]');if(!but
 $('#search').oninput=e=>{state.search=e.target.value.toLowerCase();renderSidebar();};
 $('#new-session').onclick=newSession;$('#welcome-new').onclick=newSession;$('#welcome-tools').onclick=guard(openTools);
 $('#tools-nav').onclick=guard(openTools);$('#settings-nav').onclick=guard(settings);$('#retry').onclick=guard(boot);
-$('#theme').onclick=guard(async()=>{const mode=document.documentElement.dataset.theme==='dark'?'light':'dark';setTheme(mode);await api('/api/settings',{appearance:{theme:mode}});});
+$('#theme').onclick=guard(async()=>{const mode=document.documentElement.dataset.theme==='dark'?'light':'dark';setTheme(mode);if(state.snap?.demo)return;await api('/api/settings',{appearance:{theme:mode}});});
 $('#session-actions').onclick=guard(async e=>{if(e.target.id==='resume-session'){const a=selected();await spawn(a.harness,a.cwd,a.id.split(':').slice(1).join(':'));}if(e.target.id==='handoff-session')handoff();});
 $('#view-tabs').onclick=guard(async e=>{const close=e.target.closest('[data-close-term]');if(close){const id=close.dataset.closeTerm;const t=state.snap.terms.find(t=>t.id===id);if(t?.alive){dialog('Close terminal?',`<p>This stops the ${esc(t.name)} process started by Perch. Its saved session can be resumed later.</p>`,'<button data-dismiss>Keep running</button><button class="primary" id="confirm-close">Stop and close</button>');$('#confirm-close').onclick=guard(async()=>{await api('/api/kill',{id});$('#dialog').close();apply(await api('/api/snapshot'));});}else{await api('/api/kill',{id});apply(await api('/api/snapshot'));}return;}const b=e.target.closest('[data-tab]');if(b){state.tab=b.dataset.tab;renderSession();}});
 $('#composer').onsubmit=guard(sendMessage);$('#reply').oninput=()=>{if(state.selected)state.drafts.set(state.selected,$('#reply').value);};

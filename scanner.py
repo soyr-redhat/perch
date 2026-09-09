@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import time
 import threading
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,6 +74,7 @@ class FileState:
     size: int = -1
     identity: tuple = ()
     errors: int = 0
+    harness: str = ""
 
 
 def read_history(
@@ -236,7 +238,17 @@ def _which(name: str, *fallbacks: str) -> Optional[list[str]]:
     if not path:
         return None
     if platform.system() == "Windows" and path.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", path]
+        # npm shims are shell scripts. Resolve their JS entry point so prompts and
+        # session IDs never pass through cmd.exe expansion.
+        wrapper = Path(path)
+        text = wrapper.read_text(encoding="utf-8", errors="replace")
+        match = re.search(r'%dp0%[\\/]([^"\r\n]+\.(?:m?js))', text, re.IGNORECASE)
+        node = shutil.which("node")
+        if match and node:
+            entry = wrapper.parent / match.group(1).replace("\\", os.sep)
+            if entry.is_file():
+                return [node, str(entry.resolve())]
+        return None
     return [path]
 
 
@@ -406,6 +418,9 @@ class CodexAdapter(Adapter):
 
     def __init__(self):
         self.cmd = _which("codex", "~/AppData/Local/Programs/OpenAI/Codex/bin/codex.exe")
+        self.patterns = [
+            str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions/**/*.jsonl")
+        ]
         self.resume = ["resume", "{session}"]
         self.message = ["exec", "resume", "{session}", "{text}"]
 
@@ -600,6 +615,7 @@ class Scanner:
 
     def apply_settings(self, cfg: dict) -> None:
         self.quiet_s = cfg.get("watching", {}).get("quietDays", 7) * 86400
+        self.changed.set()
         disabled = set(cfg.get("harnesses", {}).get("disabled", []))
         for adapter in self.adapters:
             adapter.enabled = adapter.id not in disabled
@@ -666,6 +682,7 @@ class Scanner:
             except (ValueError, TypeError, AttributeError, KeyError):
                 st.errors += 1
             st.offset = end
+        st.harness = adapter.id
         st.mtime, st.size = mtime, size
         return st
 
@@ -673,6 +690,8 @@ class Scanner:
         with self._lock:
             for adapter in self.adapters:
                 for path, st in self._states.items():
+                    if st.harness != adapter.id:
+                        continue
                     if f"{adapter.id}:{st.session_id or adapter.fallback_id(path)}" != agent_id:
                         continue
                     prompt = next((p for p in st.prompts if p["index"] == pidx), None)

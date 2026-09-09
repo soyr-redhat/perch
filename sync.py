@@ -24,6 +24,7 @@ SKILL_ROOTS = {
     "codex": "~/.agents/skills",
     "codex-legacy": "~/.codex/skills",
     "omp": "~/.omp/agent/skills",
+    "omp-legacy": "~/.omp/skills",
 }
 SKILL_TARGETS = ("claude", "codex", "omp")
 MCP_CLAUDE_JSON = os.path.expanduser("~/.claude.json")
@@ -53,12 +54,11 @@ def _link_dir(target: str, link: str) -> str:
     except OSError:
         if os.name != "nt":
             raise
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", os.path.normpath(link), os.path.realpath(target)],
-            check=True,
-            capture_output=True,
-            creationflags=0x08000000,
-        )
+        link_path, source_path = os.path.normpath(link), os.path.realpath(target)
+        if any(char in link_path + source_path for char in ('"', "%", "\r", "\n")):
+            raise ValueError("Windows junction paths cannot contain quotes or environment substitutions")
+        command = f'cmd.exe /d /c mklink /J "{link_path}" "{source_path}"'
+        subprocess.run(command, check=True, capture_output=True, creationflags=0x08000000)
         return "junction"
 
 
@@ -123,7 +123,7 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
                         {"link": str(dest), "target": source, "kind": entry["kind"], "ts": time.time()}
                     )
                 report["linked"].append(entry)
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 report["errors"].append({"skill": skill["name"], "into": target, "reason": str(exc)})
     if created:
         _record_links(created)

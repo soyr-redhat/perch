@@ -89,6 +89,23 @@ class ScannerTests(unittest.TestCase):
         snap = self.scanner.scan()
         self.assertEqual(snap["agents"][0]["title"], "new")
 
+    def test_windows_npm_shim_bypasses_shell(self):
+        wrapper = Path(self.tmp.name) / "cli.cmd"
+        entry = Path(self.tmp.name) / "node_modules" / "tool" / "cli.js"
+        entry.parent.mkdir(parents=True)
+        entry.write_text("// fixture")
+        wrapper.write_text('"%_prog%" "%dp0%\\node_modules\\tool\\cli.js" %*')
+
+        def which(name):
+            return str(wrapper) if name == "fixture-cli" else "node.exe"
+
+        with (
+            patch.object(scanner.platform, "system", return_value="Windows"),
+            patch.object(scanner.shutil, "which", side_effect=which),
+        ):
+            argv = scanner._which("fixture-cli")
+        self.assertEqual(argv, ["node.exe", str(entry.resolve())])
+
 
 class SharingTests(unittest.TestCase):
     def setUp(self):
@@ -260,7 +277,6 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(server._ws_recv(io.BytesIO(data))[0], "close")
 
 
-@unittest.skipIf(os.name == "nt", "POSIX PTY smoke test; Windows has a separate ConPTY test")
 class TerminalTests(unittest.TestCase):
     def test_terminal_output_and_cleanup(self):
         import sys
@@ -279,7 +295,8 @@ class TerminalTests(unittest.TestCase):
         self.assertIn(b"ready", data)
         registry.remove(term.id)
         self.assertFalse(term.alive())
-        self.assertIsNone(term.pty._m)
+        if os.name != "nt":
+            self.assertIsNone(term.pty._m)
 
 
 class SettingsTests(unittest.TestCase):
