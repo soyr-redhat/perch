@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,18 @@ def main():
                     assert b"101" in stream.readline()
                     while stream.readline() != b"\r\n":
                         pass
+                    output = b""
+                    while b"FIXTURE_READY" not in output:
+                        header = stream.read(2)
+                        assert len(header) == 2, repr(output)
+                        length = header[1] & 127
+                        if length == 126:
+                            length = struct.unpack("!H", stream.read(2))[0]
+                        elif length == 127:
+                            length = struct.unpack("!Q", stream.read(8))[0]
+                        output += stream.read(length)
+                        if header[0] & 15 == 1:
+                            raise AssertionError("Terminal exited before ready: " + repr(output))
                     payload = json.dumps({"type": "input", "data": "packaged smoke\r"}).encode()
                     mask = os.urandom(4)
                     connection.sendall(bytes([129, 128 | len(payload)]) + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(payload)))

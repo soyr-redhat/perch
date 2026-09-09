@@ -467,6 +467,9 @@ class Handler(BaseHTTPRequestHandler):
             if agent_id in self.server.delivering:
                 self._json(409, {"error": "A reply is already running for this session"})
                 return
+            if any(t["harness"] == harness_id and t.get("session") == session and t["alive"] for t in self.terms.list()):
+                self._json(409, {"error": "This session is open in a terminal. Send the message there."})
+                return
             self.server.delivering.add(agent_id)
         entry = self.pending.add(agent_id, text)
         threading.Thread(target=self._deliver, args=(agent_id, entry, argv, cwd), daemon=True).start()
@@ -475,17 +478,18 @@ class Handler(BaseHTTPRequestHandler):
     def _deliver(self, agent_id: str, entry: dict, argv: list[str], cwd: str):
         proc = None
         try:
+            from term import external_process_env
+
             with self.server.delivery_lock:
                 if self.server.stop_event.is_set():
                     raise OSError("Perch is shutting down")
-                proc = subprocess.Popen(
-                    argv,
-                    cwd=cwd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    start_new_session=os.name != "nt",
-                    creationflags=0x08000000 if os.name == "nt" else 0,
-                )
+                with external_process_env() as env:
+                    proc = subprocess.Popen(
+                        argv, cwd=cwd, env=env,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                        start_new_session=os.name != "nt",
+                        creationflags=0x08000000 if os.name == "nt" else 0,
+                    )
                 self.server.deliveries.add(proc)
             _, err = proc.communicate(timeout=900)
             if proc.returncode:
@@ -542,7 +546,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": f"no such folder: {cwd}"})
             return
         try:
-            term = self.terms.spawn(adapter.id, adapter.name, adapter.color, cwd, argv)
+            with self.server.delivery_lock:
+                if session and f"{adapter.id}:{session}" in self.server.delivering:
+                    self._json(409, {"error": "A reply is running for this session. Wait for it to finish."})
+                    return
+                term = self.terms.spawn(adapter.id, adapter.name, adapter.color, cwd, argv, session=session)
             self._json(200, {"term": term.info(), "snapshot": json.loads(self.get_snapshot())})
         except (OSError, ImportError, ValueError) as exc:
             self._json(400, {"error": f"Could not start {adapter.name}: {exc}"})

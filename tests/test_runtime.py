@@ -112,6 +112,17 @@ class RuntimeTests(unittest.TestCase):
         self.request("/api/kill", {"id": term_id})
         self.assertEqual(self.request("/api/snapshot")[1]["terms"], [])
 
+    def test_reopening_owned_session_reuses_terminal_and_blocks_parallel_reply(self):
+        body = {"harness": "fixture", "cwd": self.temp.name, "session": "session-two"}
+        first = self.request("/api/spawn", body)[1]["term"]["id"]
+        second = self.request("/api/spawn", body)[1]["term"]["id"]
+        self.assertEqual(first, second)
+        self.assertEqual(self.request("/api/message", {"agent": "fixture:session-two", "text": "hello"})[0], 409)
+
+    def test_headless_reply_blocks_parallel_resume(self):
+        self.request("/api/message", {"agent": "fixture:session-two", "text": "__SLOW__"})
+        self.assertEqual(self.request("/api/spawn", {"harness": "fixture", "cwd": self.temp.name, "session": "session-two"})[0], 409)
+
     def test_history_first_middle_latest_and_out_of_range(self):
         for index in (0, 80, 159):
             code, data = self.request(f"/api/history?agent=fixture:session-one&prompt={index}")

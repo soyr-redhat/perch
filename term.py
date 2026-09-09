@@ -15,11 +15,46 @@ import threading
 import time
 import uuid
 import signal
+import contextlib
 import sys
 from pathlib import Path
 
 IS_WIN = platform.system() == "Windows"
 BACKLOG_CAP = 96 * 1024
+_DLL_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def external_process_env():
+    """Keep bundled runtime libraries out of external harness processes."""
+    env = dict(os.environ)
+    if not getattr(sys, "frozen", False):
+        yield env
+        return
+    bundle = os.path.realpath(sys._MEIPASS)
+    for key in ("PATH", "DYLD_LIBRARY_PATH"):
+        if key in env:
+            env[key] = os.pathsep.join(p for p in env[key].split(os.pathsep) if not os.path.realpath(p).startswith(bundle + os.sep) and os.path.realpath(p) != bundle)
+    if "LD_LIBRARY_PATH" in env:
+        if "LD_LIBRARY_PATH_ORIG" in env:
+            env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
+        else:
+            env.pop("LD_LIBRARY_PATH")
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    if not IS_WIN:
+        yield env
+        return
+    import ctypes
+
+    # SetDllDirectory is process-wide, so serialize temporary changes for spawns.
+    with _DLL_LOCK:
+        original = ctypes.create_unicode_buffer(32768)
+        ctypes.windll.kernel32.GetDllDirectoryW(len(original), original)
+        ctypes.windll.kernel32.SetDllDirectoryW(None)
+        try:
+            yield env
+        finally:
+            ctypes.windll.kernel32.SetDllDirectoryW(original.value or None)
 
 
 def exec_pty_child(argv):
@@ -30,7 +65,8 @@ def exec_pty_child(argv):
     import termios
 
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-    os.execvpe(argv[0], argv, os.environ)
+    with external_process_env() as env:
+        os.execvpe(argv[0], argv, env)
 
 
 def terminate_process(proc, timeout=2):
@@ -76,7 +112,8 @@ class Pty:
         if IS_WIN:
             from winpty import PtyProcess
 
-            self._p = PtyProcess.spawn(argv, cwd=cwd or None, dimensions=(rows, cols), env=env)
+            with external_process_env() as external:
+                self._p = PtyProcess.spawn(argv, cwd=cwd or None, dimensions=(rows, cols), env={**external, "TERM": "xterm-256color", "COLORTERM": "truecolor"})
             self._kind = "win"
         else:
             import fcntl
@@ -163,13 +200,14 @@ class Pty:
 
 
 class TermSession:
-    def __init__(self, harness: str, name: str, color: str, cwd: str, argv: list[str]):
+    def __init__(self, harness: str, name: str, color: str, cwd: str, argv: list[str], session=None):
         self.id = uuid.uuid4().hex[:10]
         self.harness = harness
         self.name = name
         self.color = color
         self.cwd = cwd
         self.argv = argv
+        self.session = session
         self.started = time.time()
         self.pty = Pty(argv, cwd)
         self._subs: list[queue.Queue] = []
@@ -255,6 +293,7 @@ class TermSession:
             "name": self.name,
             "color": self.color,
             "cwd": self.cwd,
+            "session": self.session,
             "alive": alive,
             "started": self.started,
             "exit": None if alive else self.pty.exit_code(),
@@ -267,11 +306,15 @@ class TermRegistry:
         self._closed = False
         self._lock = threading.Lock()
 
-    def spawn(self, harness: str, name: str, color: str, cwd: str, argv: list[str]) -> TermSession:
+    def spawn(self, harness: str, name: str, color: str, cwd: str, argv: list[str], session=None) -> TermSession:
         with self._lock:
             if self._closed:
                 raise ValueError("Perch is shutting down")
-            term = TermSession(harness, name, color, cwd, argv)
+            if session:
+                existing = next((t for t in self._terms.values() if t.harness == harness and t.session == session and t.alive()), None)
+                if existing:
+                    return existing
+            term = TermSession(harness, name, color, cwd, argv, session=session)
             self._terms[term.id] = term
         return term
 
