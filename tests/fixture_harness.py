@@ -9,6 +9,7 @@ import time
 
 def main():
     root = Path(sys.argv[1])
+    (root / "fixture-started.json").write_text(json.dumps({"pid": os.getpid(), "argv": sys.argv}))
     args = sys.argv[2:]
     session = args[1] if args and args[0] in ("--resume", "--message") else "new-session"
     path = root / "sessions" / (session + ".jsonl")

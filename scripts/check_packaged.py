@@ -47,6 +47,7 @@ def main():
                 return json.load(response)
 
         try:
+            print("Packaged application:", executable, "External fixture Python:", sys.executable, flush=True)
             wait_for(lambda: (root / "instance.json").is_file(), proc)
             info = json.loads((root / "instance.json").read_text())
             wait_for(lambda: not request("/api/snapshot").get("loading"), proc)
@@ -84,6 +85,8 @@ def main():
             assert request("/api/snapshot")["terms"] == []
             print("Packaged backend, WebSocket input, terminal child, and cleanup passed")
         finally:
+            marker = root / "fixture-started.json"
+            print("Fixture startup:", marker.read_text() if marker.exists() else "never entered fixture", flush=True)
             try:
                 if term_id and info:
                     print("Terminal state:", request("/api/snapshot").get("terms"))

@@ -557,12 +557,17 @@ def scan_processes() -> dict[str, int]:
                 "($_.Name -eq 'node.exe' -and $_.CommandLine -match 'claude') } | "
                 "Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
             )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            ).stdout.strip()
+            from term import external_process_env
+
+            with external_process_env() as env:
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    creationflags=0x08000000,
+                    env=env,
+                ).stdout.strip()
             if not out:
                 return {}
             data = json.loads(out)
