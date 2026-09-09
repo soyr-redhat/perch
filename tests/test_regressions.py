@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 import tomllib
 import unittest
 import urllib.error
@@ -291,8 +292,17 @@ class TerminalTests(unittest.TestCase):
             [sys.executable, "-u", "-c", 'import time; print("ready", flush=True); time.sleep(60)'],
         )
         q = term.subscribe()
-        data = q.get(timeout=3)
+        # ConPTY emits control sequences before process output; stream boundaries
+        # are not message boundaries on either platform.
+        data = b""
+        deadline = time.monotonic() + 10
+        while b"ready" not in data and time.monotonic() < deadline:
+            chunk = q.get(timeout=max(0.1, deadline - time.monotonic()))
+            if chunk is None:
+                break
+            data += chunk
         self.assertIn(b"ready", data)
+        term.resize(100, 30)
         registry.remove(term.id)
         self.assertFalse(term.alive())
         if os.name != "nt":

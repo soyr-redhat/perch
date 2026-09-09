@@ -15,7 +15,9 @@ analysis = Analysis([str(entry)], pathex=[str(root)],
 pyz = PYZ(analysis.pure)
 exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name=app_name, console=False,
           debug=False, strip=False, upx=False, icon=str(icons / 'perch.ico') if sys.platform == 'win32' else None)
-collection = COLLECT(exe, analysis.binaries, analysis.datas, name=app_name, strip=False, upx=False)
+cli = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name='perch-cli', console=True,
+          debug=False, strip=False, upx=False)
+collection = COLLECT(exe, cli, analysis.binaries, analysis.datas, name=app_name, strip=False, upx=False)
 if sys.platform == 'darwin':
     app = BUNDLE(collection, name=app_name + '.app', bundle_identifier='dev.soyr.perch.demo' if demo_build else 'dev.soyr.perch',
         icon=str(icons / 'perch.icns'), info_plist={'CFBundleShortVersionString':'0.2.0','NSHighResolutionCapable':True,

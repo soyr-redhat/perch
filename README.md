@@ -26,6 +26,11 @@ perch --sync --targets claude codex omp
 perch --demo                  # synthetic sessions; no harness configuration writes
 ```
 
+The installed packages also include `perch-cli`: on macOS it is inside
+`Perch.app/Contents/MacOS/perch-cli`; on Windows it is `perch-cli.exe` in the
+installation directory. It accepts the same flags and can be added to your shell's
+PATH without installing Python. Running it without flags opens or activates Perch.
+
 CLI and desktop sharing use the same settings and synchronization engine. `PERCH_DATA_DIR` overrides Perch's own storage (default `~/.perch`); it does not relocate the harnesses. Declarative session adapters belong in `~/.perch/sources.json`.
 
 ## Sharing behavior
