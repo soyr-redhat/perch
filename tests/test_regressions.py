@@ -245,6 +245,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/snapshot", auth=False)[0], 401)
         self.assertEqual(self.request("/api/snapshot")[0], 200)
 
+    def test_non_ascii_token_is_rejected_without_closing_connection(self):
+        self.assertEqual(self.request("/api/snapshot", headers={"X-Perch-Token": "é"})[0], 401)
+        self.assertEqual(self.request("/?token=%C3%A9")[0], 200)
+
     def test_origin_rejected_even_with_token(self):
         self.assertEqual(self.request("/api/sync", {}, headers={"Origin": "https://evil.invalid"})[0], 403)
 

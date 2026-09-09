@@ -87,8 +87,8 @@ def auto_share(stop):
         try:
             current = (fingerprint(), json.dumps(cfg, sort_keys=True))
             if current != previous:
-                sync_all(skills=cfg["skills"], mcp=cfg["mcp"], targets=tuple(cfg["targets"]))
-                previous = (fingerprint(), json.dumps(cfg, sort_keys=True))
+                report = sync_all(skills=cfg["skills"], mcp=cfg["mcp"], targets=tuple(cfg["targets"]))
+                previous = None if any(report[k]["errors"] for k in ("skills", "mcp")) else (fingerprint(), json.dumps(cfg, sort_keys=True))
         except (OSError, ValueError):
             logging.exception("Automatic sharing failed")
 

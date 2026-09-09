@@ -76,6 +76,14 @@ class TranscriptContractTests(unittest.TestCase):
 
 
 class SharingContractTests(unittest.TestCase):
+    def test_automatic_sharing_retries_reported_io_failure(self):
+        stop = Mock()
+        stop.wait.side_effect = [False, False, True]
+        cfg = {"sharing": {"autoSync": True, "skills": True, "mcp": True, "targets": ["codex"]}}
+        with patch("settings.load", return_value=cfg), patch("sync.fingerprint", return_value="same"), patch("sync.sync_all", return_value={"skills": {"errors": ["Temporary I/O failure"]}, "mcp": {"errors": []}}) as apply:
+            perch.auto_share(stop)
+        self.assertEqual(apply.call_count, 2)
+
     def test_backup_preserves_windows_line_endings(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "config.json"

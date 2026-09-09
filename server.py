@@ -240,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
         cookie_name = f"perch_session_{self.server.server_port}"
         if not token and cookie_name in cookies:
             token = cookies[cookie_name].value
-        if not secrets.compare_digest(token, self.server.token):
+        if not token.isascii() or not secrets.compare_digest(token, self.server.token):
             self._json(401, {"error": "Open Perch again to reconnect securely"})
             return False
         return True
@@ -253,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         query = parse_qs(urlparse(self.path).query)
         token = (query.get("token") or [""])[0]
-        if path == "/" and token and secrets.compare_digest(token, self.server.token):
+        if path == "/" and token and token.isascii() and secrets.compare_digest(token, self.server.token):
             self.send_response(303)
             self.send_header("Set-Cookie", f"perch_session_{self.server.server_port}={token}; HttpOnly; SameSite=Strict; Path=/")
             self.send_header("Location", "/")
