@@ -44,9 +44,10 @@ function connection(on) {
   $('#connection-text').textContent=on?'Connected':'Connection interrupted'; $('#retry').hidden=on;
 }
 function apply(snap) {
+  if(state.snap&&snap.instance===state.snap.instance&&snap.revision<state.snap.revision)return;
   state.snap=snap;
   if(!snap.agents.some(a=>a.id===state.selected)) state.selected=snap.agents[0]?.id||null;
-  for(const [id,t] of state.terms) if(!snap.terms.some(x=>x.id===id)){t.ws.close();t.term.dispose();t.el.remove();state.terms.delete(id);if(state.tab===id)state.tab='activity';}
+  for(const [id,t] of state.terms) if(!snap.terms.some(x=>x.id===id)){state.terms.delete(id);clearTimeout(t.retryTimer);t.ws?.close();t.term.dispose();t.el.remove();if(state.tab===id)state.tab='activity';}
   $('#health').hidden=!snap.errors?.length;
   $('#health').textContent=(snap.errors||[]).map(e=>`${e.harness?names[e.harness]+': ':''}${e.message}`).join(' · ');
   $('#watching').textContent=snap.loading?'Discovering local sessions…':`${snap.agents.length} sessions across ${snap.watching?.length||0} harnesses`;
@@ -104,6 +105,7 @@ function renderSession() {
   if(tabsKey!==state.tabsKey){state.tabsKey=tabsKey;$('#view-tabs').innerHTML=`<button role="tab" data-tab="activity" aria-selected="${state.tab==='activity'}">Activity</button>`+state.snap.terms.map(t=>`<span class="terminal-tab"><button role="tab" data-tab="${esc(t.id)}" aria-selected="${state.tab===t.id}">▣ ${esc(t.name)}${t.alive?'':' · exited'}</button><button class="close-term" data-close-term="${esc(t.id)}" aria-label="Close ${esc(t.name)} terminal">×</button></span>`).join('');}
   $('#activity-view').hidden=state.tab!=='activity';$('#terminal-view').hidden=state.tab==='activity';
   if(state.tab!=='activity'){showTerm(state.tab);return;}
+  state.activeTerminal=null;
   $('#history-toolbar').hidden=!a;$('#history-rail').hidden=!a;$('#composer').hidden=!a||!h.canMessage;
   $('#send').disabled=!a||state.sending.has(a.id);$('#reply-hint').textContent=a?`Message ${h.name} · ${navigator.platform.includes('Mac')?'⌘':'Ctrl'} Enter`:'⌘ Enter to send';
   if($('#reply').dataset.agent!==a?.id){$('#reply').value=state.drafts.get(a?.id)||'';$('#reply').dataset.agent=a?.id||'';}
@@ -152,8 +154,20 @@ async function loadHistory(index) {
 async function sendMessage(e) {
   e.preventDefault();const a=selected(),text=$('#reply').value.trim();if(!a||!text||state.sending.has(a.id))return;
   state.sending.add(a.id);$('#send').disabled=true;
-  try{await api('/api/message',{agent:a.id,text});state.drafts.delete(a.id);if(state.selected===a.id&&$('#reply').value.trim()===text)$('#reply').value='';toast('Message started');}
+  try{await api('/api/message',{agent:a.id,text});if(state.drafts.get(a.id)?.trim()===text)state.drafts.delete(a.id);if(state.selected===a.id&&$('#reply').value.trim()===text)$('#reply').value='';toast('Message started');}
   finally{state.sending.delete(a.id);if(state.selected===a.id)$('#send').disabled=false;}
+}
+function connectTerm(id,t) {
+  if(state.terms.get(id)!==t||t.ended)return;
+  const ws=new WebSocket(`ws://${location.host}/ws/term/${id}`);ws.binaryType='arraybuffer';t.ws=ws;
+  const status=text=>{t.status=text;if(state.tab===id)$('#terminal-status').textContent=text;};
+  ws.onopen=()=>{t.term.reset();t.fit.fit();ws.send(JSON.stringify({type:'resize',cols:t.term.cols,rows:t.term.rows}));status('');};
+  ws.onmessage=e=>{
+    if(typeof e.data==='string'){const message=JSON.parse(e.data);t.ended=message.type==='exit';status(t.ended?'Process exited':'Reconnecting terminal…');return;}
+    t.attempts=0;t.term.write(new Uint8Array(e.data));
+  };
+  ws.onerror=()=>status('Reconnecting terminal…');
+  ws.onclose=()=>{if(state.terms.get(id)!==t||t.ws!==ws||t.ended)return;status('Reconnecting terminal…');t.retryTimer=setTimeout(()=>connectTerm(id,t),Math.min(5000,500*2**Math.min(t.attempts++,4)));};
 }
 function showTerm(id) {
   const info=state.snap.terms.find(t=>t.id===id);if(!info)return;
@@ -162,18 +176,16 @@ function showTerm(id) {
     const el=document.createElement('div');el.className='terminal-element';$('#terminal-mount').append(el);
     const term=new Terminal({fontFamily:'ui-monospace, "Cascadia Code", monospace',fontSize:13,theme:termTheme(),scrollback:4000,cursorBlink:true});
     const fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open(el);
-    const ws=new WebSocket(`ws://${location.host}/ws/term/${id}`);ws.binaryType='arraybuffer';
-    t={el,term,fit,ws};state.terms.set(id,t);
-    ws.onopen=()=>{fit.fit();ws.send(JSON.stringify({type:'resize',cols:term.cols,rows:term.rows}));};
-    ws.onmessage=e=>{if(typeof e.data==='string'){$('#terminal-status').textContent='Terminal stream ended. Close this tab or reopen the session.';return;}term.write(new Uint8Array(e.data));};
-    ws.onclose=()=>{if(state.tab===id)$('#terminal-status').textContent='Terminal disconnected. Close this tab and reopen the session to reconnect.';};
-    term.onData(data=>{if(ws.readyState===1)ws.send(data);});term.onResize(({cols,rows})=>{if(ws.readyState===1)ws.send(JSON.stringify({type:'resize',cols,rows}));});
+    t={el,term,fit,ws:null,attempts:0,ended:false,status:''};state.terms.set(id,t);
+    term.onData(data=>{if(t.ws?.readyState===1)t.ws.send(JSON.stringify({type:'input',data}));});term.onResize(({cols,rows})=>{if(t.ws?.readyState===1)t.ws.send(JSON.stringify({type:'resize',cols,rows}));});
+    connectTerm(id,t);
   }
   for(const [key,item] of state.terms)item.el.hidden=key!==id;
-  $('#terminal-status').textContent=info.alive?`${info.name} · ${info.cwd}`:`Process exited${info.exit!=null?' with code '+info.exit:''}`;
-  requestAnimationFrame(()=>{t.fit.fit();t.term.focus();});
+  $('#terminal-status').textContent=t.status||(info.alive?`${info.name} · ${info.cwd}`:`Process exited${info.exit!=null?' with code '+info.exit:''}`);
+  const focus=state.activeTerminal!==id;state.activeTerminal=id;
+  requestAnimationFrame(()=>{if(state.tab!==id)return;t.fit.fit();if(focus&&!$('#dialog').open)t.term.focus();});
 }
-async function spawn(hid,cwd,session) {const data=await api('/api/spawn',{harness:hid,cwd:cwd||'',...(session?{session}:{})});state.snap.terms.push(data.term);state.page='sessions';state.tab=data.term.id;showPage();renderSession();return data.term;}
+async function spawn(hid,cwd,session) {const data=await api('/api/spawn',{harness:hid,cwd:cwd||'',...(session?{session}:{})});state.page='sessions';state.tab=data.term.id;apply(data.snapshot);showPage();renderSession();return data.term;}
 function dialog(title,body,footer='') {
   $('#dialog-content').innerHTML=`<div class="dialog-head"><h2>${esc(title)}</h2><button data-dismiss class="icon-button" aria-label="Close dialog">×</button></div><div class="dialog-body">${body}</div>${footer?`<div class="dialog-footer">${footer}</div>`:''}`;
   if(!$('#dialog').open)$('#dialog').showModal();

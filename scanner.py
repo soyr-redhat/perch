@@ -171,27 +171,25 @@ def _max_ts(a: Optional[str], b: Optional[str]) -> Optional[str]:
     return a or b
 
 
-def _first_text(content: Any) -> Optional[str]:
-    """Pull the first meaningful text out of a message content field."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") in ("text", "input_text", "output_text"):
-                t = block.get("text")
-                if t:
-                    return t
-    return None
+def _first_text(content: Any, user=False) -> Optional[str]:
+    """Collect one message's text blocks without splitting it into extra prompts."""
+    blocks = [content] if isinstance(content, str) else [
+        b.get("text") for b in content
+        if isinstance(b, dict) and b.get("type") in ("text", "input_text", "output_text")
+    ] if isinstance(content, list) else []
+    texts = [_clean_user_text(t) if user else t for t in blocks if isinstance(t, str)]
+    return "\n\n".join(t for t in texts if t) or None
 
 
 def _clean_user_text(text: Optional[str]) -> Optional[str]:
     """Drop environment/context scaffolding that looks like a user message."""
-    if not text:
+    if not isinstance(text, str) or not text:
         return None
-    stripped = text.lstrip()
-    if stripped.startswith("<"):
-        return None
-    return text
+    # Strip only recognized harness scaffolding, preserving HTML/XML requests and
+    # actual user text following a context block in the same message.
+    tags = "environment_context|permissions instructions|collaboration_mode|in-app-browser-context"
+    cleaned = re.sub(rf"<({tags})(?:\s[^>]*)?>.*?</\1>", "", text, flags=re.DOTALL)
+    return cleaned.strip() or None
 
 
 def _truncate(text: str, limit: int = 8000) -> str:
@@ -319,7 +317,7 @@ class OmpAdapter(Adapter):
             role = msg.get("role")
             blocks = msg.get("content") or []
             if role == "user":
-                text = _clean_user_text(_first_text(blocks))
+                text = _first_text(blocks, user=True)
                 if text:
                     st.tail.append(TailEvent("user", _truncate(text), ts))
                     st.prompts.append({"text": _truncate(text, 70), "ts": ts})
@@ -372,24 +370,13 @@ class ClaudeAdapter(Adapter):
         content = msg.get("content")
 
         if rtype == "user":
-            if isinstance(content, str):
-                text = _clean_user_text(content)
-                if text:
-                    st.tail.append(TailEvent("user", _truncate(text), ts))
-                    st.prompts.append({"text": _truncate(text, 70), "ts": ts})
-                    if not st.title:
-                        st.title = _truncate(text, 70)
+            text = _first_text(content, user=True)
+            if text:
+                st.tail.append(TailEvent("user", _truncate(text), ts))
+                st.prompts.append({"text": _truncate(text, 70), "ts": ts})
+                if not st.title:
+                    st.title = _truncate(text, 70)
                 st.hint = "busy"
-            elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = _clean_user_text(block.get("text"))
-                        if text:
-                            st.tail.append(TailEvent("user", _truncate(text), ts))
-                            st.prompts.append({"text": _truncate(text, 70), "ts": ts})
-                            if not st.title:
-                                st.title = _truncate(text, 70)
-                        st.hint = "busy"
         elif rtype == "assistant":
             if msg.get("model"):
                 st.model = msg["model"]
@@ -442,7 +429,7 @@ class CodexAdapter(Adapter):
             if ptype == "message":
                 role = payload.get("role")
                 if role in ("user", "assistant"):
-                    text = _clean_user_text(_first_text(payload.get("content")))
+                    text = _first_text(payload.get("content"), user=role == "user")
                     if text:
                         st.tail.append(TailEvent(role, _truncate(text), ts))
                         if role == "user":
@@ -480,6 +467,18 @@ class DeclarativeAdapter(Adapter):
     """
 
     def __init__(self, cfg: dict):
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("id"), str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", cfg["id"]):
+            raise ValueError("Source needs a valid id")
+        for key in ("patterns", "cmd", "resume", "message"):
+            value = cfg.get(key)
+            if value is not None and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
+                raise ValueError(f"{key} must be a list of strings")
+        if cfg.get("format", "jsonl") not in ("json", "jsonl"):
+            raise ValueError("Source format must be json or jsonl")
+        if not isinstance(cfg.get("map", {}), dict) or not all(isinstance(v, str) for v in cfg.get("map", {}).values()):
+            raise ValueError("Source map must contain paths")
+        if not isinstance(cfg.get("roles", {}), dict):
+            raise ValueError("Source roles must be an object")
         self.id = cfg["id"]
         self.name = cfg.get("name", self.id)
         self.color = cfg.get("color", "#0a84ff")
@@ -503,11 +502,13 @@ class DeclarativeAdapter(Adapter):
         m = self.map
         ts = dig(rec, m.get("ts", ""))
         st.last_ts = _max_ts(st.last_ts, ts if isinstance(ts, str) else None)
-        st.session_id = st.session_id or dig(rec, m.get("id", ""))
-        st.cwd = st.cwd or dig(rec, m.get("cwd", ""))
+        identifier = dig(rec, m["id"]) if m.get("id") else None
+        cwd = dig(rec, m["cwd"]) if m.get("cwd") else None
+        st.session_id = st.session_id or (identifier if isinstance(identifier, str) else None)
+        st.cwd = st.cwd or (cwd if isinstance(cwd, str) else None)
         st.started = st.started or (ts if isinstance(ts, str) else None)
-        model = dig(rec, m.get("model", ""))
-        if model:
+        model = dig(rec, m["model"]) if m.get("model") else None
+        if isinstance(model, str) and model:
             st.model = model
         role = self._role_of(dig(rec, m.get("role", "")))
         text = dig(rec, m.get("text", ""))
@@ -530,11 +531,13 @@ def load_declarative(config_path: str) -> list[DeclarativeAdapter]:
             cfg = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return []
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("sources", []), list):
+        return []
     adapters = []
     for entry in cfg.get("sources", []):
         try:
             adapters.append(DeclarativeAdapter(entry))
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ValueError):
             continue
     return adapters
 
@@ -623,6 +626,7 @@ class Scanner:
     def start_watching(self):
         from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
+        from watchdog.observers.polling import PollingObserver
 
         scanner = self
 
@@ -632,7 +636,9 @@ class Scanner:
                     return
                 scanner.changed.set()
 
-        observer = Observer()
+        # FSEvents can abort the interpreter in restricted macOS app contexts.
+        # Polling watches metadata only; transcript parsing remains incremental.
+        observer = PollingObserver(timeout=2) if platform.system() == "Darwin" else Observer()
         roots = set()
         for adapter in self.adapters:
             for pattern in adapter.patterns:
@@ -644,7 +650,16 @@ class Scanner:
                     roots.add(str(root))
         for root in roots:
             observer.schedule(Events(), root, recursive=True)
-        observer.start()
+        try:
+            observer.start()
+        except (OSError, RuntimeError):
+            observer.stop()
+            if observer.is_alive():
+                observer.join(timeout=3)
+            observer = PollingObserver(timeout=2)
+            for root in roots:
+                observer.schedule(Events(), root, recursive=True)
+            observer.start()
         self._observer = observer
 
     def close(self):
@@ -694,6 +709,8 @@ class Scanner:
                         continue
                     if f"{adapter.id}:{st.session_id or adapter.fallback_id(path)}" != agent_id:
                         continue
+                    if not 0 <= pidx < st.prompts.count:
+                        raise ValueError("Prompt index is outside this session")
                     prompt = next((p for p in st.prompts if p["index"] == pidx), None)
                     return read_history(
                         adapter,

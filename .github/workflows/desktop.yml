@@ -30,10 +30,14 @@ jobs:
         run: python -m PyInstaller packaging/perch.spec --noconfirm
       - name: Validate packaged CLI on macOS
         if: runner.os == 'macOS'
-        run: dist/Perch.app/Contents/MacOS/perch-cli --version
+        run: |
+          dist/Perch.app/Contents/MacOS/perch-cli --version
+          python scripts/check_packaged.py dist/Perch.app/Contents/MacOS/perch-cli
       - name: Validate packaged CLI on Windows
         if: runner.os == 'Windows'
-        run: dist/Perch/perch-cli.exe --version
+        run: |
+          dist/Perch/perch-cli.exe --version
+          python scripts/check_packaged.py dist/Perch/perch-cli.exe
       - name: Package macOS application
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent dist/Perch.app dist/Perch-macOS.zip

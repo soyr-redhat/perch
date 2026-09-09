@@ -15,14 +15,27 @@ import threading
 import time
 import uuid
 import signal
+import sys
+from pathlib import Path
 
 IS_WIN = platform.system() == "Windows"
 BACKLOG_CAP = 96 * 1024
 
 
+def exec_pty_child(argv):
+    """Acquire the controlling terminal after setsid, without a threaded preexec_fn."""
+    if IS_WIN or not argv:
+        raise SystemExit("Invalid terminal child invocation")
+    import fcntl
+    import termios
+
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    os.execvpe(argv[0], argv, os.environ)
+
+
 def terminate_process(proc, timeout=2):
     """Stop a Perch-owned process tree and reap its leader."""
-    if proc.poll() is not None:
+    if IS_WIN and proc.poll() is not None:
         return
     try:
         if IS_WIN:
@@ -34,6 +47,17 @@ def terminate_process(proc, timeout=2):
             )
         else:
             os.killpg(proc.pid, signal.SIGTERM)
+        if not IS_WIN:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                proc.poll()  # reap the leader even if its descendants remain
+                try:
+                    os.killpg(proc.pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(.02)
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
         proc.wait(timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         try:
@@ -63,8 +87,9 @@ class Pty:
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
             try:
+                executable = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, str(Path(__file__).with_name("perch.py"))]
                 self._p = subprocess.Popen(
-                    argv,
+                    [*executable, "--perch-pty-child", *argv],
                     cwd=cwd or None,
                     env=env,
                     stdin=slave,
@@ -84,7 +109,8 @@ class Pty:
     def read(self) -> bytes:
         if self._kind == "win":
             return self._p.read().encode("utf-8", "replace")
-        return os.read(self._m, 16384)
+        fd = self._m
+        return os.read(fd, 16384) if fd is not None else b""
 
     def write(self, data: bytes) -> None:
         if self._kind == "win":
@@ -131,7 +157,8 @@ class Pty:
             except OSError:
                 pass
         else:
-            terminate_process(self._p)
+            if self._m is not None or self._p.poll() is None:
+                terminate_process(self._p)
         self.close()
 
 

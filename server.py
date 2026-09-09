@@ -58,21 +58,32 @@ def _ws_send(sock, payload: bytes, opcode: int = 2) -> None:
     sock.sendall(bytes(header) + payload)
 
 
-def _ws_recv(rfile):
+def _ws_recv(rfile, on_ping=None):
     """Read one complete message -> (kind, payload). kind: msg|ping|close."""
     fragments = bytearray()
+    started = False
     while True:
         head = rfile.read(2)
         if len(head) < 2:
             return ("close", None)
         fin = head[0] & 0x80
         opcode = head[0] & 0x0F
+        if head[0] & 0x70 or opcode not in (0, 1, 2, 8, 9, 10):
+            return ("close", None)
         masked = head[1] & 0x80
         length = head[1] & 0x7F
         if length == 126:
-            length = struct.unpack("!H", rfile.read(2))[0]
+            extended = rfile.read(2)
+            if len(extended) != 2:
+                return ("close", None)
+            length = struct.unpack("!H", extended)[0]
         elif length == 127:
-            length = struct.unpack("!Q", rfile.read(8))[0]
+            extended = rfile.read(8)
+            if len(extended) != 8:
+                return ("close", None)
+            length = struct.unpack("!Q", extended)[0]
+        if opcode >= 8 and (not fin or length > 125):
+            return ("close", None)
         if not masked or length > 1024 * 1024 or len(fragments) + length > 1024 * 1024:
             return ("close", None)
         mask = rfile.read(4)
@@ -86,7 +97,17 @@ def _ws_recv(rfile):
         if opcode == 8:
             return ("close", None)
         if opcode == 9:
-            return ("ping", data)
+            if on_ping:
+                on_ping(data)
+                continue
+            if not started:
+                return ("ping", data)
+            continue
+        if opcode == 10:
+            continue
+        if (opcode == 0 and not started) or (opcode in (1, 2) and started):
+            return ("close", None)
+        started = True
         fragments += data
         if fin:
             return ("msg", bytes(fragments))
@@ -216,8 +237,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         token = self.headers.get("X-Perch-Token", "")
-        if "perch_session" in cookies:
-            token = cookies["perch_session"].value
+        cookie_name = f"perch_session_{self.server.server_port}"
+        if not token and cookie_name in cookies:
+            token = cookies[cookie_name].value
         if not secrets.compare_digest(token, self.server.token):
             self._json(401, {"error": "Open Perch again to reconnect securely"})
             return False
@@ -233,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
         token = (query.get("token") or [""])[0]
         if path == "/" and token and secrets.compare_digest(token, self.server.token):
             self.send_response(303)
-            self.send_header("Set-Cookie", f"perch_session={token}; HttpOnly; SameSite=Strict; Path=/")
+            self.send_header("Set-Cookie", f"perch_session_{self.server.server_port}={token}; HttpOnly; SameSite=Strict; Path=/")
             self.send_header("Location", "/")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", "0")
@@ -283,7 +305,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             self._json(200, self.scanner.history(agent_id, pidx))
-        except (OSError, ValueError) as exc:
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)})
+        except OSError as exc:
             self._json(500, {"error": str(exc)})
 
     def _settings(self):
@@ -437,6 +461,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "Session is not available"})
             return
         with self.server.delivery_lock:
+            if self.server.stop_event.is_set():
+                self._json(503, {"error": "Perch is shutting down"})
+                return
             if agent_id in self.server.delivering:
                 self._json(409, {"error": "A reply is already running for this session"})
                 return
@@ -448,15 +475,17 @@ class Handler(BaseHTTPRequestHandler):
     def _deliver(self, agent_id: str, entry: dict, argv: list[str], cwd: str):
         proc = None
         try:
-            proc = subprocess.Popen(
-                argv,
-                cwd=cwd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                start_new_session=os.name != "nt",
-                creationflags=0x08000000 if os.name == "nt" else 0,
-            )
             with self.server.delivery_lock:
+                if self.server.stop_event.is_set():
+                    raise OSError("Perch is shutting down")
+                proc = subprocess.Popen(
+                    argv,
+                    cwd=cwd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    start_new_session=os.name != "nt",
+                    creationflags=0x08000000 if os.name == "nt" else 0,
+                )
                 self.server.deliveries.add(proc)
             _, err = proc.communicate(timeout=900)
             if proc.returncode:
@@ -514,7 +543,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             term = self.terms.spawn(adapter.id, adapter.name, adapter.color, cwd, argv)
-            self._json(200, {"term": term.info()})
+            self._json(200, {"term": term.info(), "snapshot": json.loads(self.get_snapshot())})
         except (OSError, ImportError, ValueError) as exc:
             self._json(400, {"error": f"Could not start {adapter.name}: {exc}"})
 
@@ -557,7 +586,7 @@ class Handler(BaseHTTPRequestHandler):
                     except queue.Empty:
                         continue
                     if chunk is None:  # PTY EOF
-                        safe_send(json.dumps({"type": "exit"}).encode(), opcode=1)
+                        safe_send(json.dumps({"type": "reconnect" if term.alive() else "exit"}).encode(), opcode=1)
                         return
                     if not safe_send(chunk, opcode=2):
                         return
@@ -571,7 +600,7 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=writer, daemon=True).start()
         try:
             while not stop.is_set():
-                kind, data = _ws_recv(self.rfile)
+                kind, data = _ws_recv(self.rfile, on_ping=lambda payload: safe_send(payload, opcode=0xA))
                 if kind == "close":
                     break
                 if kind == "ping":
@@ -582,6 +611,9 @@ class Handler(BaseHTTPRequestHandler):
                         ctl = json.loads(data)
                         if ctl.get("type") == "resize":
                             term.resize(int(ctl["cols"]), int(ctl["rows"]))
+                            continue
+                        if ctl.get("type") == "input" and isinstance(ctl.get("data"), str):
+                            term.write(ctl["data"].encode())
                             continue
                     except (ValueError, KeyError, TypeError):
                         pass
@@ -597,22 +629,14 @@ class Handler(BaseHTTPRequestHandler):
 # wiring
 
 
-def scan_loop(scanner, terms, pending, hub, state, stop, interval=2.0):
-    last = state["snapshot"]
+def scan_loop(scanner, publish, stop, interval=2.0):
     while not stop.is_set():
         try:
             snap = scanner.scan()
-            snap["terms"] = terms.list()
-            snap["pending"] = pending.snapshot(snap["agents"])
-            payload = json.dumps(snap)
         except Exception as exc:
-            snap = json.loads(state["snapshot"])
+            snap = json.loads(publish())
             snap["errors"] = [{"message": f"Scanner unavailable: {type(exc).__name__}"}]
-            payload = json.dumps(snap)
-        if payload != last:
-            last = payload
-            state["snapshot"] = payload
-            hub.publish(payload)
+        publish(snap)
         # File events refresh quickly. Status ages still reconcile every two seconds.
         deadline = time.monotonic() + interval
         while not stop.is_set() and time.monotonic() < deadline:
@@ -657,12 +681,32 @@ def serve(scanner, terms, port=0, demo=False):
             }
         )
     }
+    snapshot_lock = threading.Lock()
+    base = json.loads(state["snapshot"])
+    revision, previous = 0, None
+    instance = secrets.token_hex(8)
+
+    def publish(snapshot=None):
+        nonlocal base, revision, previous
+        with snapshot_lock:
+            if snapshot is not None:
+                base = {k: v for k, v in snapshot.items() if k not in ("revision", "instance", "terms", "pending")}
+            current = {**base, "terms": terms.list(), "pending": pending.snapshot(base["agents"])}
+            semantic = json.dumps(current)
+            if semantic != previous:
+                previous = semantic
+                revision += 1
+                state["snapshot"] = json.dumps({**current, "revision": revision, "instance": instance})
+                hub.publish(state["snapshot"])
+            return state["snapshot"]
+
+    publish()
     handler = type(
         "BoundHandler",
         (Handler,),
         {
             "hub": hub,
-            "get_snapshot": staticmethod(lambda: state["snapshot"]),
+            "get_snapshot": staticmethod(publish),
             "scanner": scanner,
             "terms": terms,
             "pending": pending,
@@ -676,7 +720,7 @@ def serve(scanner, terms, port=0, demo=False):
     httpd.deliveries, httpd.delivering = set(), set()
     httpd.delivery_lock = threading.Lock()
     httpd.scan_thread = threading.Thread(
-        target=scan_loop, args=(scanner, terms, pending, hub, state, httpd.stop_event), daemon=True
+        target=scan_loop, args=(scanner, publish, httpd.stop_event), daemon=True
     )
     httpd.scan_thread.start()
     return httpd

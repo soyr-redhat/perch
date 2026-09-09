@@ -62,12 +62,17 @@ def _link_dir(target: str, link: str) -> str:
         return "junction"
 
 
-def _record_links(created: list[dict]) -> None:
+def _load_manifest():
     doc = {"created": []}
     if Path(MANIFEST).exists():
         doc = json.loads(Path(MANIFEST).read_text(encoding="utf-8"))
         if not isinstance(doc, dict) or not isinstance(doc.get("created"), list):
             raise ValueError("Invalid Perch sync manifest")
+    return doc
+
+
+def _record_links(created: list[dict]) -> None:
+    doc = _load_manifest()
     doc["created"].extend(created)
     write_json(MANIFEST, doc)
 
@@ -91,6 +96,11 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
     roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
     inventory = skill_inventory(roots)
     report = {"linked": [], "present": [], "conflicts": [], "errors": [], "total": len(inventory)}
+    try:
+        _load_manifest()
+    except (OSError, ValueError) as exc:
+        report["errors"].append({"source": "Perch", "reason": f"Cannot read sync manifest: {type(exc).__name__}"})
+        return report
     created = []
     for skill in inventory:
         origins = skill["origins"]
@@ -123,10 +133,13 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
                         {"link": str(dest), "target": source, "kind": entry["kind"], "ts": time.time()}
                     )
                 report["linked"].append(entry)
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 report["errors"].append({"skill": skill["name"], "into": target, "reason": str(exc)})
     if created:
-        _record_links(created)
+        try:
+            _record_links(created)
+        except (OSError, ValueError) as exc:
+            report["errors"].append({"source": "Perch", "reason": f"Links created but manifest could not be saved: {type(exc).__name__}"})
     return report
 
 
@@ -172,6 +185,8 @@ def _norm_server(cfg, source=""):
     if unsupported:
         raise ValueError("Client-specific fields need review: " + ", ".join(unsupported))
     if cfg.get("command"):
+        if any(key in cfg for key in ("headers", "http_headers")):
+            raise ValueError("HTTP headers cannot be applied to a stdio server")
         if not isinstance(cfg["command"], str):
             raise ValueError("Command must be text")
         out = {"command": cfg["command"]}
@@ -186,6 +201,10 @@ def _norm_server(cfg, source=""):
         if cfg.get("type", "stdio") != "stdio":
             raise ValueError("Command transport must be stdio")
     else:
+        if any(key in cfg for key in ("args", "env")):
+            raise ValueError("Command arguments and environment cannot be applied to an HTTP server")
+        if "headers" in cfg and "http_headers" in cfg and cfg["headers"] != cfg["http_headers"]:
+            raise ValueError("Conflicting HTTP header definitions")
         if not isinstance(cfg["url"], str) or not cfg["url"].startswith(("https://", "http://")):
             raise ValueError("Expected an HTTP or HTTPS URL")
         transport = cfg.get("type", "http")

@@ -109,6 +109,10 @@ def parser():
 
 
 def main():
+    if sys.argv[1:2] == ["--perch-pty-child"]:
+        from term import exec_pty_child
+
+        exec_pty_child(sys.argv[2:])
     args = parser().parse_args()
     extend_path()
     cfg = settings.load()
@@ -127,7 +131,7 @@ def main():
             )
         )
         print(json.dumps(result, indent=2))
-        return 0
+        return int(any(result.get(section, {}).get(kind) for section in ("skills", "mcp") for kind in ("errors", "conflicts", "blocked"))) if not args.tools else 0
     if args.quiet_days is not None:
         if not 0.1 <= args.quiet_days <= 90:
             raise SystemExit("--quiet-days must be between 0.1 and 90")
