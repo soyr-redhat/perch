@@ -104,7 +104,7 @@ function renderSession() {
   if(tabsKey!==state.tabsKey){state.tabsKey=tabsKey;$('#view-tabs').innerHTML=`<button role="tab" data-tab="activity" aria-selected="${state.tab==='activity'}">Activity</button>`+state.snap.terms.map(t=>`<span class="terminal-tab"><button role="tab" data-tab="${esc(t.id)}" aria-selected="${state.tab===t.id}">▣ ${esc(t.name)}${t.alive?'':' · exited'}</button><button class="close-term" data-close-term="${esc(t.id)}" aria-label="Close ${esc(t.name)} terminal">×</button></span>`).join('');}
   $('#activity-view').hidden=state.tab!=='activity';$('#terminal-view').hidden=state.tab==='activity';
   if(state.tab!=='activity'){showTerm(state.tab);return;}
-  $('#history-toolbar').hidden=!a;$('#composer').hidden=!a||!h.canMessage;
+  $('#history-toolbar').hidden=!a;$('#history-rail').hidden=!a;$('#composer').hidden=!a||!h.canMessage;
   $('#send').disabled=!a||state.sending.has(a.id);$('#reply-hint').textContent=a?`Message ${h.name} · ${navigator.platform.includes('Mac')?'⌘':'Ctrl'} Enter`:'⌘ Enter to send';
   if($('#reply').dataset.agent!==a?.id){$('#reply').value=state.drafts.get(a?.id)||'';$('#reply').dataset.agent=a?.id||'';}
   if(!a){state.feedKey='';$('#feed').innerHTML='<div class="welcome"><h2>No sessions yet</h2></div>';return;}
@@ -114,7 +114,7 @@ function renderSession() {
   $('#history').max=String(total);$('#history').disabled=!total;
   $('#history').value=String(scrub?.index??hist?.prompt??total);
   previewHistory(Number($('#history').value),total,a);
-  $('#history-live').hidden=!hist&&!scrub;
+  $('#history-live').disabled=!hist&&!scrub;
   $('#history-caption').textContent=hist?`Prompt ${hist.prompt+1} of ${hist.of}${hist.truncated?' · first 100 events':''}`:'Recent activity';
   const pending=hist?[]:(state.snap.pending[a.id]||[]);
   const key=JSON.stringify([a.id,hist||a.tail,pending]);if(key===state.feedKey)return;state.feedKey=key;
@@ -129,10 +129,14 @@ function eventHtml(e,name) {
 }
 function previewHistory(index,total,a=selected()) {
   const live=index>=total, text=live?'Live activity':a?.prompts.find(p=>p.index===index)?.text||`Prompt ${index+1}`;
-  $('#history-position').textContent=live?'Live':`${index+1} / ${total}`;
-  $('#history-preview').textContent=text;
+  $('#history-preview').textContent=live?text:`${index+1} / ${total}: ${text}`;
   $('#history').setAttribute('aria-valuetext',live?'Live activity':`Prompt ${index+1} of ${total}: ${text}`);
-  $('#history').style.setProperty('--progress',`${total?index/total*100:0}%`);
+  $('.prompt-scrubber').style.setProperty('--progress',`${total?index/total*100:0}%`);
+  const marks=$('#history-marks');
+  if(marks.dataset.total!==String(total)){
+    marks.dataset.total=String(total);const count=Math.min(total,40);
+    marks.innerHTML=Array.from({length:count},(_,n)=>`<i style="top:${count>1?Math.round(n*(total-1)/(count-1))/total*100:0}%"></i>`).join('');
+  }
 }
 function liveHistory() {state.historyRequest++;state.scrub=null;state.history=null;state.follow=true;state.feedKey='';$('#feed').removeAttribute('aria-busy');renderSession();}
 async function loadHistory(index) {
