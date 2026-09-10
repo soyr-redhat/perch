@@ -78,9 +78,10 @@ jobs:
           set -euo pipefail
           cd release
           for asset in */Perch-*; do
-            name="$(basename "$asset")"
-            sha256sum "$asset" | sed "s#  $asset#  $name#" >> SHA256SUMS
-            cp "$asset" "$name"
+            mv "$asset" "$(basename "$asset")"
+          done
+          for asset in Perch-*; do
+            sha256sum "$asset" >> SHA256SUMS
           done
       - uses: softprops/action-gh-release@v2
         with:
