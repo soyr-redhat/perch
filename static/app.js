@@ -138,6 +138,7 @@ function previewHistory(position,total,a=selected()) {
   $('.prompt-scrubber').style.setProperty('--progress',`${total?position/total*100:0}%`);
   const marks=$('#history-marks');
   if(marks.dataset.total!==String(total)){
+    $('.prompt-scrubber').style.setProperty('--rail-height',`${Math.min(300,Math.max(36,18+total*18))}px`);
     marks.dataset.total=String(total);const count=Math.min(total,40);
     marks.innerHTML=Array.from({length:count},(_,n)=>`<i style="top:${count>1?Math.round(n*(total-1)/(count-1))/total*100:0}%"></i>`).join('');
   }
