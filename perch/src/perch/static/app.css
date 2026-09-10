@@ -20,3 +20,4 @@
 .feed::-webkit-scrollbar{display:none}
 @media(max-width:650px){.history-rail{margin-right:6px;width:24px}.activity-timeline .feed{padding-right:12px}}
 @media(prefers-reduced-motion:reduce){.prompt-marks i,.prompt-current,.prompt-preview{transition:none}}
+.dialog-footer a{color:var(--accent);text-underline-offset:3px}.dialog-footer a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}

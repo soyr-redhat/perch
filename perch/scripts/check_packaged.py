@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zipfile
 
 
 def wait_for(fn, proc, timeout=20):
@@ -90,7 +91,15 @@ def main():
             wait_for(lambda: any(a["id"] == "fixture:new-session" for a in request("/api/snapshot")["agents"]), proc)
             request("/api/message", {"agent": "fixture:new-session", "text": "packaged reply"})
             wait_for(lambda: "Fixture reply: packaged reply" in transcript.read_text(), proc)
-            print("Packaged single instance, backend, terminal input/output, headless reply, and cleanup passed")
+            wait_for(lambda: not request("/api/snapshot").get("pending"), proc)
+            exported = request("/api/conversations/export", {"agent": "fixture:new-session"})
+            with zipfile.ZipFile(exported["archive"]) as archive:
+                assert archive.read("source.jsonl") == transcript.read_bytes()
+                assert b"Fixture reply: packaged reply" in archive.read("transcript.txt")
+            cli_export = subprocess.run([executable, "--export-session", "fixture:new-session"], env={**os.environ, "PERCH_DATA_DIR": str(root)}, capture_output=True, timeout=15)
+            assert cli_export.returncode == 0, cli_export.stderr
+            assert json.loads(cli_export.stdout)["manifest"]["recording"]["sha256"] == exported["manifest"]["recording"]["sha256"]
+            print("Packaged single instance, backend, terminal input/output, headless reply, desktop/CLI export, and cleanup passed")
         finally:
             marker = root / "fixture-started.json"
             print("Fixture startup:", marker.read_text() if marker.exists() else "never entered fixture", flush=True)

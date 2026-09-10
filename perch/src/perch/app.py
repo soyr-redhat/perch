@@ -26,6 +26,28 @@ def run_app(url, httpd):
     httpd.native_bridge = True
 
     class Bridge:
+        def show_export(self, snapshot_id):
+            from .conversations import archive_path
+            from .desktop.lifecycle import show_export
+
+            try:
+                show_export(archive_path(snapshot_id))
+                return {"ok": True}
+            except (OSError, ValueError) as exc:
+                return {"error": str(exc)}
+
+        def open_session(self, agent_id):
+            from .desktop.lifecycle import open_codex_session
+
+            agent = next((a for a in httpd.scanner.scan()["agents"] if a["id"] == agent_id), None)
+            try:
+                if httpd.demo or not agent or agent["harness"] != "codex":
+                    raise ValueError("A recorded Codex session is required")
+                open_codex_session(agent_id.partition(":")[2])
+                return {"ok": True}
+            except (OSError, ValueError) as exc:
+                return {"error": str(exc)}
+
         def pick_folder(self):
             result = window.create_file_dialog(webview.FileDialog.FOLDER)
             return result[0] if result else None
@@ -107,6 +129,8 @@ def parser():
     p.add_argument("--tools", action="store_true", help="Show shared tool inventory as JSON and exit")
     p.add_argument("--targets", nargs="+", choices=settings.TARGETS, help="Harnesses to receive shared tools")
     p.add_argument("--demo", action="store_true", help="Read-only synthetic sessions for UI evaluation")
+    p.add_argument("--sessions", action="store_true", help="List detected session IDs as JSON and exit")
+    p.add_argument("--export-session", metavar="HARNESS:ID", help="Save a complete recorded session and exit")
     p.add_argument("--version", action="version", version="Perch 0.2.0")
     return p
 
@@ -139,6 +163,21 @@ def main():
         if not 0.1 <= args.quiet_days <= 90:
             raise SystemExit("--quiet-days must be between 0.1 and 90")
         cfg["watching"]["quietDays"] = args.quiet_days
+    if args.sessions or args.export_session:
+        from .conversations import export_known_session
+
+        scanner = Scanner(config_dir=str(DATA_DIR))
+        scanner.apply_settings(cfg)
+        try:
+            result = (
+                [{key: agent.get(key) for key in ("id", "harness", "title", "cwd")} for agent in scanner.scan()["agents"]]
+                if args.sessions else export_known_session(scanner, args.export_session)
+            )
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return 0
     if not (args.browser or args.no_browser):
         try:
             import webview  # noqa: F401

@@ -50,6 +50,9 @@ A packaged macOS application was also operated in demo mode. Verified: applicati
 
 ## Boundaries and remaining release checks
 
+- Conversation export tests cover complete source preservation, 200 long messages, unknown/malformed/oversized records, inline media, external-reference isolation, source mutation, failed archive cleanup, authenticated downloads, and the common desktop/CLI engine. Native Codex dispatch is tested with mocked macOS/Windows handlers; successful OS dispatch alone does not prove that a particular session is visible in the destination app.
+- Exports preserve one source file in record order. Cross-file history, active-branch reconstruction, automatic destination delivery, and drag-to-transfer are not implemented yet. External attachments are reported but not copied. Export folders are retained until removed by the user.
+
 - Windows installer interaction, WebView2 integration, clipboard, and native dialogs need a Windows desktop acceptance run; CI process checks do not cover those GUI behaviors.
 - Windows development/build verification uses Python 3.12. Packaged users do not need to install Python. The compatible 2.x PTY runtime has slower reads than 3.x; Windows throughput/latency benchmarking remains outstanding.
 - Packaged Windows terminal verification is a merge gate. See the latest Actions result and the dated user-facing report for its current status.

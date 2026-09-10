@@ -301,6 +301,25 @@ class Handler(BaseHTTPRequestHandler):
             self._events()
         elif path == "/api/history":
             self._history()
+        elif path.startswith("/api/conversations/"):
+            from .conversations import archive_path
+            from .storage import DATA_DIR
+
+            try:
+                archive = archive_path(path.removeprefix("/api/conversations/"), data_dir=self.scanner.config_dir or DATA_DIR)
+                with archive.open("rb") as source:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(os.fstat(source.fileno()).st_size))
+                    self.send_header("Content-Disposition", 'attachment; filename="perch-conversation.zip"')
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    import shutil
+
+                    shutil.copyfileobj(source, self.wfile)
+            except (ValueError, FileNotFoundError):
+                self._json(404, {"error": "Export not found"})
         elif path == "/api/tools":
             if self.server.demo:
                 from . import demo
@@ -450,6 +469,13 @@ class Handler(BaseHTTPRequestHandler):
             self._kill(body)
         elif path == "/api/message":
             self._message(body)
+        elif path == "/api/conversations/export":
+            from .conversations import export_known_session
+
+            try:
+                self._json(200, export_known_session(self.scanner, body.get("agent")))
+            except (OSError, ValueError) as exc:
+                self._json(400, {"error": str(exc)})
         elif path == "/api/sync":
             self._sync(body)
         elif path == "/api/tools":

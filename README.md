@@ -29,6 +29,8 @@ The macOS release targets Apple silicon. Gatekeeper may require confirmation unt
 - Opens supported harness sessions in an embedded terminal.
 - Lets you continue a compatible recorded session without leaving the desktop app.
 - Inspects and shares compatible skills and MCP server definitions across installed harnesses.
+- Exports a session recording, transcript, and inline attachments for use in another harness.
+- Opens recorded Codex sessions in its desktop app through a native link.
 
 `perch` opens the application. `perch-cli` provides the same command-line actions without Python:
 
@@ -36,6 +38,8 @@ The macOS release targets Apple silicon. Gatekeeper may require confirmation unt
 perch-cli --tools
 perch-cli --dry-run
 perch-cli --sync --targets claude codex omp
+perch-cli --sessions
+perch-cli --export-session 'claude:SESSION_ID'
 perch-cli --demo
 ```
 
@@ -47,6 +51,14 @@ Shared tool state lives alongside it:
 - `~/.perch/shared/mcp/servers.json` stores portable MCP definitions. Perch writes compatible entries into each harness’s native configuration when you apply sharing.
 
 Existing user-managed links and configuration remain in place. Plugin installations, hooks, custom agents, and sign-in state stay with their own harnesses.
+
+### Conversation exports
+
+Select **Export…** in a session, or use `--export-session` with an ID from `--sessions`. Both save to `~/.perch/conversations/<export-id>/`. **Copy reference** copies a local file reference to give another harness; **Show files** opens the export folder. Browser development mode offers a ZIP download.
+
+Each export includes the original recording, a transcript in source record order, `manifest.json` with source hashes and attachment availability, and a portable ZIP. It preserves the whole source file, including branches and tool events, without the activity view’s display limits. Malformed or unusually large records remain in the original source and are identified in the manifest. Inline images and documents are extracted where recognized; external file and URL references are listed without fetching them. Other session files and live runtime state are not included.
+
+Exporting does not send a message or merge project files. A local reference works only where the receiving harness can read that folder; use the ZIP when moving it elsewhere. Automated delivery and drag-to-transfer are tracked in [RFC #2](https://github.com/soyr-redhat/perch/issues/2).
 
 ## Repository layout
 

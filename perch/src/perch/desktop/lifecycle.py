@@ -3,9 +3,46 @@
 from __future__ import annotations
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import urllib.request
 from ..storage import DATA_DIR, write_json
+
+
+def _mac_open(*args):
+    try:
+        result = subprocess.run(["open", *args], capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        raise OSError("Opening the application timed out") from exc
+    if result.returncode:
+        raise OSError("Could not open the item. Check that its application is installed.")
+
+
+def show_export(archive):
+    if not archive.is_file():
+        raise ValueError("Export not found")
+    if sys.platform == "darwin":
+        _mac_open("-R", str(archive))
+    elif sys.platform == "win32":
+        os.startfile(str(archive.parent))
+    else:
+        raise ValueError("File reveal is supported on macOS and Windows")
+
+
+def open_codex_session(session_id):
+    """Ask the OS to open a known session through Codex's registered deep link."""
+    from uuid import UUID
+
+    if not isinstance(session_id, str) or str(UUID(session_id)) != session_id:
+        raise ValueError("Invalid Codex session ID")
+    url = "codex://threads/" + session_id
+    if sys.platform == "darwin":
+        _mac_open(url)
+    elif sys.platform == "win32":
+        os.startfile(url)
+    else:
+        raise ValueError("Native session opening is supported on macOS and Windows")
 
 
 def extend_path():
