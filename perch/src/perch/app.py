@@ -1,4 +1,4 @@
-"""Perch: one installed workspace, shared by desktop and command-line workflows."""
+"""Perch: connect context and capabilities across coding harnesses."""
 
 from __future__ import annotations
 import argparse
@@ -119,7 +119,7 @@ def auto_share(stop):
 
 
 def parser():
-    p = argparse.ArgumentParser(description="Perch — a desktop workspace for coding agents")
+    p = argparse.ArgumentParser(description="Perch — connect context and capabilities across coding harnesses")
     p.add_argument("--browser", action="store_true", help="Explicit browser mode for development")
     p.add_argument("--no-browser", action="store_true", help="Serve locally without opening a window")
     p.add_argument("--port", type=int, default=7766)

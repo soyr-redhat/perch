@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "perch-workspace"
 version = "0.2.0"
-description = "A desktop workspace for coding agents and shared tools"
+description = "Connect context, tools, plugins, and skills across coding harnesses"
 requires-python = ">=3.11"
 dependencies = ["pywebview>=6.2,<7", "tomlkit>=0.13,<1", "watchdog>=6,<7", "pywinpty==2.0.15; sys_platform == 'win32'"]
 

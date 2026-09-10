@@ -1,6 +1,6 @@
 # Interoperability contract
 
-Perch is a local workspace over the harnesses' existing session recordings and configuration. It does not replace their account systems or execution policy.
+Perch connects context and compatible capabilities across harnesses. Harnesses remain responsible for their own conversation interface, execution, accounts, and permissions. Perch's reader supports inspecting and transferring context; its target workflow routes work into native harness tools.
 
 | Harness | Sessions | Skills | MCP |
 |---|---|---|---|
@@ -17,7 +17,9 @@ MCP conversion supports the portable core: `command`, string `args`, string-valu
 
 Static values deliberately configured in an MCP definition, including headers and environment values, are part of the selected sharing operation. They are never displayed in tool inventory or reports. OAuth credential stores are never read or copied. A copied remote server may still require sign-in in the destination client.
 
-Plugins can contain platform-specific code, commands, environment assumptions, and approval rules. Copying their installation directories across harnesses is not a supported interchange format. Plugins, hooks, agent definitions, and sign-in state remain harness-owned. Perch shares explicit skills and MCP configuration, reports unsupported mappings, and offers a reviewed context handoff.
+Plugins can contain platform-specific code, commands, environment assumptions, and approval rules. Copying their installation directories across harnesses is not a supported interchange format. Current sharing covers explicit skills and MCP configuration; plugin installations, hooks, agent definitions, and sign-in state remain harness-owned.
+
+Planned plugin adapters will inventory those components, map compatible skills and tool definitions into destination formats, retain source provenance, and identify host-specific features. Context delivery will use the saved recording snapshots with destination-specific import or attachment routes. These adapters and automatic delivery are not implemented yet; see [RFC #2](https://github.com/soyr-redhat/perch/issues/2).
 
 ## References checked during implementation
 
