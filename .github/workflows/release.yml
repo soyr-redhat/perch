@@ -72,14 +72,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release
+          merge-multiple: true
       - name: Assemble checksums
         shell: bash
         run: |
           set -euo pipefail
           cd release
-          for asset in */Perch-*; do
-            mv "$asset" "$(basename "$asset")"
-          done
           for asset in Perch-*; do
             sha256sum "$asset" >> SHA256SUMS
           done
