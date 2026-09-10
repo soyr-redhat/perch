@@ -115,7 +115,7 @@ function renderSession() {
   const scrub=state.scrub?.agent===a.id?state.scrub:null;
   const total=scrub?.total??Math.max(hist?.of||0,(a.prompts.at(-1)?.index??-1)+1);
   $('#history').max=String(total);$('#history').disabled=!total;
-  $('#history').value=String(scrub?.index??hist?.prompt??total);
+  $('#history').value=String(scrub?.index??hist?.position??hist?.prompt??total);
   previewHistory(Number($('#history').value),total,a);
   $('#history-live').disabled=!hist&&!scrub;
   $('#history-caption').textContent=hist?`Prompt ${hist.prompt+1} of ${hist.of}${hist.truncated?' · first 100 events':''}`:'Recent activity';
@@ -130,11 +130,12 @@ function eventHtml(e,name) {
   const label=labels[e.who]||'Activity';const tool=e.who==='tool'||e.who==='think';
   return `<article class="event ${esc(e.who)}${e.pending?' pending':''}"><span class="avatar" aria-hidden="true">${e.who==='user'?'Y':tool?'⋮':esc(name[0])}</span><div>${tool?`<details><summary>${label} · ${esc(e.text.slice(0,85))}</summary><pre>${esc(e.text)}</pre></details>`:`<div class="event-heading"><strong>${esc(label)}</strong><time data-time="${esc(e.ts||'')}">${e.ts?ago(e.ts):e.pending?'Sending…':''}</time></div><div class="event-text">${esc(e.text)}</div>`}${e.error?`<div class="event-error">${esc(e.error)}</div>`:''}</div></article>`;
 }
-function previewHistory(index,total,a=selected()) {
+function previewHistory(position,total,a=selected()) {
+  const index=Math.floor(position);
   const live=index>=total, text=live?'Live activity':a?.prompts.find(p=>p.index===index)?.text||`Prompt ${index+1}`;
   $('#history-preview').textContent=live?text:`${index+1} / ${total}: ${text}`;
   $('#history').setAttribute('aria-valuetext',live?'Live activity':`Prompt ${index+1} of ${total}: ${text}`);
-  $('.prompt-scrubber').style.setProperty('--progress',`${total?index/total*100:0}%`);
+  $('.prompt-scrubber').style.setProperty('--progress',`${total?position/total*100:0}%`);
   const marks=$('#history-marks');
   if(marks.dataset.total!==String(total)){
     marks.dataset.total=String(total);const count=Math.min(total,40);
@@ -142,13 +143,13 @@ function previewHistory(index,total,a=selected()) {
   }
 }
 function liveHistory() {state.historyRequest++;state.scrub=null;state.history=null;state.follow=true;state.feedKey='';$('#feed').removeAttribute('aria-busy');renderSession();}
-async function loadHistory(index) {
+async function loadHistory(index,position=index) {
   const a=selected();if(!a)return;const id=a.id,request=++state.historyRequest;
   $('#feed').setAttribute('aria-busy','true');
   try {
     const data=await api(`/api/history?agent=${encodeURIComponent(id)}&prompt=${index}`);
     if(state.selected!==id||request!==state.historyRequest)return;
-    state.history={agent:id,...data};state.feedKey='';
+    state.history={agent:id,...data,position};state.feedKey='';
   } catch(e) {if(state.selected===id&&request===state.historyRequest)throw e;}
   finally {if(request===state.historyRequest){state.scrub=null;$('#feed').removeAttribute('aria-busy');renderSession();}}
 }
@@ -235,7 +236,14 @@ $('#view-tabs').onclick=guard(async e=>{const close=e.target.closest('[data-clos
 $('#composer').onsubmit=guard(sendMessage);$('#reply').oninput=()=>{if(state.selected)state.drafts.set(state.selected,$('#reply').value);};
 $('#reply').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();$('#composer').requestSubmit();}};
 $('#history').oninput=e=>{const a=selected();if(!a)return;state.historyRequest++;state.scrub={agent:a.id,index:Number(e.target.value),total:Number(e.target.max)};previewHistory(state.scrub.index,state.scrub.total,a);};
-$('#history').onchange=guard(e=>Number(e.target.value)>=Number(e.target.max)?liveHistory():loadHistory(Number(e.target.value)));
+$('#history').onchange=guard(e=>Number(e.target.value)>=Number(e.target.max)?liveHistory():loadHistory(Math.floor(Number(e.target.value)),Number(e.target.value)));
+$('#history').onkeydown=e=>{
+  const rail=e.currentTarget,total=Number(rail.max),index=Math.floor(Number(rail.value));
+  const positions={ArrowUp:index-1,ArrowLeft:index-1,ArrowDown:index+1,ArrowRight:index+1,PageUp:index-10,PageDown:index+10,Home:0,End:total};
+  if(!(e.key in positions))return;
+  e.preventDefault();rail.value=String(Math.max(0,Math.min(total,positions[e.key])));
+  rail.dispatchEvent(new Event('input'));rail.dispatchEvent(new Event('change'));
+};
 $('#history-live').onclick=liveHistory;
 $('#feed').onscroll=()=>{const f=$('#feed');state.follow=f.scrollHeight-f.scrollTop-f.clientHeight<60;if(state.follow)$('#follow').hidden=true;};
 $('#follow').onclick=()=>{$('#feed').scrollTop=$('#feed').scrollHeight;state.follow=true;$('#follow').hidden=true;};
