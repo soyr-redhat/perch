@@ -83,7 +83,7 @@ printf '#!/bin/sh\n# Perch managed launcher\nexec "%s" "$@"\n' "$shell_path" > "
 chmod 755 "$stage/launcher"
 
 if [ -e "$target" ]; then
-  backup="$install_dir/.Perch.app.previous.$$"
+  backup="$install_dir/.Perch.app.previous.$(basename "$stage")"
   mv "$target" "$backup"
 fi
 app_changed=true

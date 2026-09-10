@@ -26,7 +26,8 @@ def launcher(app):
 
 def owned(path, app):
     if path.is_symlink():
-        return Path(os.path.realpath(path)).name == "perch-cli" and ".app/Contents/MacOS/" in os.path.realpath(path)
+        target = Path(os.path.realpath(path))
+        return len(target.parents) >= 3 and target.name == "perch-cli" and target.parent.name == "MacOS" and target.parent.parent.name == "Contents" and target.parents[2].suffix == ".app"
     if not path.is_file() or path.stat().st_size > 8192:
         return False
     text = path.read_text(encoding="utf-8", errors="replace")
