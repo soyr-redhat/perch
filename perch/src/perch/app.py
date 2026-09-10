@@ -148,6 +148,7 @@ def auto_share(stop):
 
 def parser():
     p = argparse.ArgumentParser(description="Perch — connect context and capabilities across coding harnesses")
+    p.add_argument("--mcp-bridge", metavar="RESOURCE_ID", help="Run a managed MCP connection over stdio")
     p.add_argument("--browser", action="store_true", help="Explicit browser mode for development")
     p.add_argument("--no-browser", action="store_true", help="Serve locally without opening a window")
     p.add_argument("--port", type=int, default=7766)
@@ -181,6 +182,17 @@ def main():
 
         exec_pty_child(sys.argv[2:])
     args = parser().parse_args()
+    if args.mcp_bridge:
+        import asyncio
+        from .mcp_bridge import run_bridge
+
+        extend_path()
+        try:
+            asyncio.run(run_bridge(args.mcp_bridge))
+        except (Exception, KeyboardInterrupt):
+            print("Perch MCP connection closed. Check the server and sign-in in Perch.", file=sys.stderr)
+            return 1
+        return 0
     extend_path()
     cfg = settings.load()
     if args.transfer or args.send_transfer or args.transfer_status:

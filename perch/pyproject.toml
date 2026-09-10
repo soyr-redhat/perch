@@ -7,7 +7,7 @@ name = "perch-workspace"
 version = "0.2.0"
 description = "Connect context, tools, plugins, and skills across coding harnesses"
 requires-python = ">=3.11"
-dependencies = ["pywebview>=6.2,<7", "tomlkit>=0.13,<1", "watchdog>=6,<7", "pywinpty==2.0.15; sys_platform == 'win32'"]
+dependencies = ["pywebview>=6.2,<7", "tomlkit>=0.13,<1", "watchdog>=6,<7", "mcp==1.30.0", "keyring>=25,<26", "pywinpty==2.0.15; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 dev = ["pyinstaller>=6.22,<7", "ruff>=0.12,<1", "pillow>=11,<13"]

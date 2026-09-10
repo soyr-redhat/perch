@@ -490,6 +490,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, export_known_session(self.scanner, body.get("agent")))
             except (OSError, ValueError) as exc:
                 self._json(400, {"error": str(exc)})
+        elif path in ("/api/resources/read", "/api/resources/change", "/api/resources/removed"):
+            from . import resources
+
+            try:
+                if path.endswith('/read'):
+                    result = resources.inspect_resource(body.get('id'), body.get('source')) if body.get('id') else {'revision': resources._revision()}
+                elif path.endswith('/removed'):
+                    result = {'items': resources.removed(), 'revision': resources._revision()}
+                else:
+                    result = resources.change(body)
+                self._json(200, result)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                self._json(400, {"error": str(exc)})
+        elif path == "/api/mcp/auth":
+            from . import mcp_bridge
+
+            try:
+                action = body.get('action', 'status')
+                if action == 'sign-in':
+                    result = mcp_bridge.start_sign_in(body.get('id'))
+                elif action == 'sign-out':
+                    result = mcp_bridge.sign_out(body.get('id'))
+                elif action in ('job', 'cancel'):
+                    result = mcp_bridge.job_status(body.get('job'), cancel=action == 'cancel')
+                elif action == 'status':
+                    result = mcp_bridge.status(body.get('id'))
+                else:
+                    raise ValueError('Unknown sign-in action')
+                self._json(200, result)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                self._json(400, {"error": str(exc)})
         elif path == "/api/skills/review":
             from . import skill_sharing
 

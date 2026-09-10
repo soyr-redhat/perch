@@ -115,13 +115,17 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None,
             skill_sharing.recover()
     except (OSError, ValueError, KeyError) as exc:
         return {"linked": [], "registered": [], "present": [], "consolidated": [], "backups": [], "conflicts": [], "errors": [{"source": "Perch", "reason": f"Cannot recover sharing state: {exc}"}], "total": 0}
-    inventory = skill_inventory(roots)
+    from .resources import managed_names
+
+    excluded = managed_names('skill')
+    inventory = [r for r in skill_inventory(roots) if r['name'] not in excluded]
     for name, source in (extra or {}).items():
         item = next((item for item in inventory if item["name"] == name), None)
         if item is None:
             item = {"name": name, "origins": {}, "presentIn": []}
             inventory.append(item)
         item["origins"]["plugin"] = str(Path(source).resolve())
+    inventory = [r for r in inventory if r['name'] not in excluded]
     if names is not None:
         inventory = [item for item in inventory if item["name"] in names]
     report = {"linked": [], "registered": [], "present": [], "consolidated": [], "backups": [], "conflicts": [], "errors": [], "total": len(inventory)}
@@ -293,6 +297,9 @@ def _backup(path):
 
 
 def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, extra=None, names=None) -> dict:
+    from .resources import managed_names
+
+    excluded = managed_names('mcp')
     registry_path = _mcp_registry(paths)
     paths = _paths(paths)
     report = {"found": 0, "sources": {}, "registered": [], "added": {}, "conflicts": [], "blocked": [], "errors": []}
@@ -307,6 +314,8 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, e
             loaded[source] = (raw, doc, servers)
             report["sources"][source] = len(servers)
             for name, cfg in servers.items():
+                if name in excluded:
+                    continue
                 try:
                     norm = _norm_server(cfg, source)
                     if norm is None:
@@ -329,6 +338,8 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, e
         report["errors"].append({"source": "Perch", "reason": f"Cannot read MCP registry: {type(exc).__name__}"})
         return report
     for name, cfg in registry_servers.items():
+        if name in excluded:
+            continue
         if name in union and union[name] != cfg:
             ambiguous.add(name)
         else:
@@ -433,7 +444,9 @@ def mcp_overview(paths=None):
 
 
 def fingerprint():
-    digest = hashlib.sha256()
+    from .resources import catalog
+
+    digest = hashlib.sha256(json.dumps(catalog(), sort_keys=True).encode())
     manifest = Path(MANIFEST)
     digest.update(str(manifest).encode())
     digest.update(manifest.read_bytes() if manifest.is_file() else b"")
@@ -463,6 +476,9 @@ def sync_all(skills=True, mcp=True, targets=SKILL_TARGETS, dry_run=False, revisi
             from .skill_sharing import recover
 
             recover()
+            from .resources import recover as recover_resources
+
+            recover_resources()
         before = fingerprint()
         plan_id = hashlib.sha256((before + json.dumps([skills, mcp, targets, skill_sources, sorted(skill_names) if skill_names else None])).encode()).hexdigest()
         if revision is not None and revision != plan_id:

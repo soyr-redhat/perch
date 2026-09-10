@@ -239,7 +239,9 @@ def inventory(*, base=None, plugins=None, errors=None):
             parent.components.append(rid)
             resources.append(asdict(resource))
         next(r for r in resources if r["id"] == parent.id)["components"] = parent.components
-    return {"resources": resources, "targets": base["targets"], "errors": errors or []}
+    from .resources import overlay
+
+    return {"resources": overlay(resources, base["targets"]) if live else resources, "targets": base["targets"], "errors": errors or []}
 
 
 def link(resource_id, target, *, revision=None, apply=False):
@@ -249,6 +251,8 @@ def link(resource_id, target, *, revision=None, apply=False):
         plugins, errors = discover_plugins()
         catalog = inventory(plugins=plugins, errors=errors)
         resource = next((r for r in catalog["resources"] if r["id"] == resource_id), None)
+        if resource and resource.get("managed"):
+            raise ValueError("Edit this resource in Perch to change its harnesses")
         if not resource or resource["kind"] not in ("skill", "mcp"):
             raise ValueError("Select a skill or MCP component")
         if resource["compatibility"][target]["status"] in ("unsupported", "disabled"):

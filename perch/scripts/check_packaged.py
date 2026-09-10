@@ -1,5 +1,6 @@
 """Smoke-test an installed CLI's backend and embedded terminal without real accounts."""
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -26,11 +27,33 @@ def wait_for(fn, proc, timeout=20):
     raise AssertionError("Packaged operation timed out")
 
 
+async def check_mcp_bridge(executable, root):
+    from mcp import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+    managed = root / 'managed'
+    managed.mkdir(exist_ok=True)
+    fixture = str(Path(__file__).resolve().parents[1] / 'tests' / 'fixture_mcp.py')
+    (managed / 'resources.json').write_text(json.dumps({'version': 1, 'items': {'packaged-fixture': {
+        'id': 'packaged-fixture', 'name': 'packaged-fixture', 'kind': 'mcp', 'targets': [],
+        'config': {'command': sys.executable, 'args': [fixture]}, 'authentication': 'none', 'secrets': None,
+    }}}))
+    params = StdioServerParameters(command=executable, args=['--mcp-bridge', 'packaged-fixture'],
+                                  env={**os.environ, 'PERCH_DATA_DIR': str(root)})
+    async with stdio_client(params) as (reader, writer):
+        async with ClientSession(reader, writer) as session:
+            await session.initialize()
+            assert (await session.call_tool('echo', {'text': 'packaged bridge'})).content[0].text == 'Echo: packaged bridge'
+            assert (await session.read_resource('fixture://document')).contents[0].text == 'Fixture resource'
+            assert (await session.get_prompt('review', {'subject': 'packaging'})).messages[0].content.text == 'Review packaging'
+
+
 def main():
     executable = str(Path(sys.argv[1]).resolve())
     fixture = str(Path(__file__).resolve().parents[1] / "tests" / "fixture_harness.py")
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
+        asyncio.run(asyncio.wait_for(check_mcp_bridge(executable, root), 30))
+        print('Packaged MCP tools, resources, and prompts passed with desktop closed', flush=True)
         target = root / "sessions/context-target.jsonl"
         target.parent.mkdir()
         target.write_text("".join(json.dumps({"id": "context-target", "cwd": str(root), "role": role, "text": text}) + "\n"

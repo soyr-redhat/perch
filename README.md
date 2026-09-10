@@ -32,6 +32,8 @@ The current source supports:
 - Reading Claude plugin installations and Codex plugin caches, including their skill, MCP, and host-specific components. Cached entries are labelled separately from installations.
 - Linking skills through a shared local registry and adding compatible MCP definitions to native harness configurations.
 - Reviewing and connecting individual skills and MCP components to selected harnesses through the same desktop and CLI engine.
+- Creating and editing skills and MCP server configurations inside Perch, with selected harness connections and recoverable removal.
+- Signing in to compatible OAuth MCP servers in Perch and using the same authorization through its local bridge.
 - Browsing recorded Claude Code, Codex, and omp conversations to inspect their context.
 - Exporting a complete recording file, transcript, and recognized inline attachments for use in another harness.
 - Opening recorded Codex sessions through a native desktop link; destination visibility still needs acceptance testing.
@@ -59,9 +61,19 @@ Shared tool state lives alongside it:
 - `~/.perch/shared/skills/<name>` links each compatible skill to its detected source. Perch-managed harness skill directories link through this location, so an edit is immediately shared.
 - `~/.perch/shared/mcp/servers.json` stores portable MCP definitions. Perch writes compatible entries into each harness’s native configuration when you apply sharing.
 
-Identical skill folders can be consolidated through the shared registry. Perch keeps the authoritative source in place and backs up replaced harness entries. Different contents get an in-app source choice; unrelated entries and MCP configuration remain in place. Plugin packages, hooks, custom agents, and sign-in state stay with their own harnesses. Supported plugin skills and MCP definitions can be connected individually. Relative MCP paths are resolved within the plugin; unresolved environment variables and host-specific components require an adapter. Authentication and execution permissions remain with each harness.
+Identical skill folders can be consolidated through the shared registry. Perch keeps the authoritative source in place and backs up replaced harness entries. Different contents get an in-app source choice; unrelated entries and MCP configuration remain in place. Plugin packages, hooks, custom agents, and existing harness sign-in state stay with their own harnesses. Supported plugin skills and MCP definitions can be connected individually. Relative MCP paths are resolved within the plugin; unresolved environment variables and host-specific components require an adapter. Harness accounts and execution permissions remain with each harness.
 
 Review one connection with `perch-cli --link RESOURCE_ID --target codex`, using an ID from `--capabilities`. Apply that reviewed change with the same arguments plus `--apply --revision REVISION`. Changes to the source or existing configuration invalidate the review.
+
+### Editing in Perch
+
+Select a skill or MCP server and choose **Edit in Perch**. The first save creates a Perch-owned resource; later edits update it directly. Skills support `SKILL.md` and supporting UTF-8 text files. Original external source folders are preserved. Choose the harnesses that should receive the shared version in the same editor.
+
+The **+** menu adds a skill or MCP server. **Remove…** disconnects Perch-managed entries and hides the item from automatic sharing. **+ → Removed items** restores it. Unrelated or externally changed harness entries are preserved. Edits check for concurrent changes and use a recovery journal; interrupted saves are restored before the next mutation. Owned skill versions and backups remain in `~/.perch/managed` and hidden sibling backups.
+
+MCP edits change the server configuration, not its implementation. Managed connections run through the bundled `perch-cli --mcp-bridge` process; the desktop can be closed. Saved environment and header values are masked in the editor and stored in macOS Keychain or Windows Credential Manager. Reconnect existing MCP connections after configuration changes.
+
+For an HTTPS Streamable HTTP server supporting MCP OAuth discovery and dynamic client registration, select **Sign in with OAuth**, save, then choose **Sign in**. Perch opens the provider in your browser and keeps its own authorization in the OS credential store. Selected harnesses use that authorization through the bridge; Perch never copies their existing login sessions. Providers requiring a pre-registered client, legacy SSE, and host-specific connector APIs require further adapters. Real-provider and Windows desktop sign-in acceptance remain outstanding.
 
 ### Installation and skill repair
 

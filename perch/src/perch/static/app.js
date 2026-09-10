@@ -4,7 +4,7 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const folder = (p) => p?.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'Other sessions';
 const activityLabel = s => ({working:'Active',waiting:'Idle',quiet:'Recent'}[s]||'Status unavailable');
-const names = {claude:'Claude Code',codex:'Codex',omp:'omp','claude-desktop':'Claude Desktop','codex-legacy':'Codex (legacy)'};
+const names = {perch:'Perch',claude:'Claude Code',codex:'Codex',omp:'omp','claude-desktop':'Claude Desktop','codex-legacy':'Codex (legacy)'};
 const state = {snap:null, selected:localStorage.getItem('perch.selected'), filter:'all', search:'', page:'tools',
   tab:'activity', terms:new Map(), feedKey:'', sidebarKey:'', tabsKey:'', history:null, historyRequest:0, promptNav:null,
   tools:null, toolTab:'all', resourceSearch:'', resourceId:null, resourceReview:null, cfg:null, connected:false, follow:true};
@@ -280,6 +280,74 @@ function showTransfer(receipt) {
   $('#refresh-transfer').onclick=guard(async()=>showTransfer(await api('/api/transfers/'+receipt.id)));
   if($('#send-transfer'))$('#send-transfer').onclick=async()=>{const button=$('#send-transfer');button.disabled=true;try{await api('/api/transfers/send',{id:receipt.id});showTransfer(await api('/api/transfers/'+receipt.id));}catch(e){$('#transfer-status').textContent=e.message;button.disabled=false;}};
 }
+let resourceEditor=null,resourceAuthJob=null,resourceAuthTimer,resourceEditRequest=0;
+function leaveResourceEditor() {
+  if(!resourceEditor){resourceEditRequest++;return true;}
+  if(resourceEditor.busy)return false;
+  if(resourceEditor.dirty&&!confirm('Discard unsaved changes?'))return false;
+  resourceEditRequest++;resourceEditor=null;$('#resource-detail').dataset.key='';return true;
+}
+function editorBody() {
+  const ed=resourceEditor;
+  if(ed.kind==='skill'&&ed.current)ed.files[ed.current]=$('#editor-text').value;
+  const body={...(ed.id?{id:ed.id,source:ed.source}:{}),kind:ed.kind,name:ed.id?ed.name:$('#editor-name').value,
+    baseRevision:ed.revision,targets:[...document.querySelectorAll('[data-editor-target]:checked')].map(x=>x.dataset.editorTarget)};
+  if(ed.kind==='skill')body.files=ed.id?Object.fromEntries(Object.entries(ed.files).filter(([name,text])=>text!==ed.originalFiles[name])):ed.files;
+  else{body.config=JSON.parse($('#editor-config').value);body.authentication=$('#editor-auth').value;}
+  return body;
+}
+async function editResource(id=null,kind='skill',source=null) {
+  if(!leaveResourceEditor())return;
+  const request=++resourceEditRequest;
+  const data=await api('/api/resources/read',id?{id,source}:{});
+  if(request!==resourceEditRequest)return;
+  const ed=resourceEditor={...data,id,kind:id?data.kind:kind,files:data.files||{'SKILL.md':'---\nname: new-skill\ndescription: \n---\n'},dirty:false,busy:false};
+  ed.originalFiles={...ed.files};
+  ed.current=Object.keys(ed.files).find(f=>f.toLowerCase()==='skill.md')||Object.keys(ed.files)[0];
+  $('#resource-workspace').classList.add('detail-open');
+  $('#resource-detail').innerHTML=`<div class="editor-heading"><h2>${id?'Edit '+esc(data.name):'Add '+(kind==='skill'?'skill':'MCP server')}</h2><button class="inline-action" id="cancel-resource-edit">Cancel</button></div>${!data.managed&&id?'<p class="detail-muted">Save creates an editable Perch copy. Existing entries in the selected harnesses are backed up.</p>':''}${!id?'<label class="field">Name<input id="editor-name" maxlength="100" autocomplete="off"></label>':''}${data.sources?.length>1&&!data.managed?`<label class="field">Starting source<select id="editor-source">${data.sources.map(s=>`<option value="${esc(s.id)}" ${s.id===data.source?'selected':''}>${esc(names[s.harness]||s.harness)} · ${esc(s.path)}</option>`).join('')}</select></label>`:''}${ed.kind==='skill'?`<div class="editor-file-bar"><label class="field">File<select id="editor-file">${Object.keys(ed.files).map(f=>`<option ${f===ed.current?'selected':''}>${esc(f)}</option>`).join('')}</select></label><button class="inline-action" id="editor-add-file">Add file</button><button class="inline-action" id="editor-remove-file">Remove file</button></div><label class="field editor-code"><span class="sr-only">File contents</span><textarea id="editor-text" spellcheck="false">${esc(ed.files[ed.current]||'')}</textarea></label>${data.readonly?.length?`<details class="detail-muted"><summary>${data.readonly.length} supporting entries preserved</summary>${data.readonly.map(esc).join('<br>')}</details>`:''}`:`<label class="field editor-code">Server configuration<textarea id="editor-config" spellcheck="false">${esc(JSON.stringify(data.config||{url:'https://'},null,2))}</textarea></label><p class="detail-muted">Saved environment and header values stay hidden. Enter a new value to replace one.</p><label class="field">Authentication<select id="editor-auth"><option value="none">Server configuration</option><option value="oauth" ${data.authentication==='oauth'?'selected':''}>Sign in with OAuth</option></select></label>`}<fieldset class="editor-targets"><legend>Share with</legend>${state.tools.targets.filter(t=>ed.kind!=='skill'||t.skills).map(t=>`<label class="choice-row">${esc(t.name)}<input type="checkbox" data-editor-target="${esc(t.id)}" ${data.targets?.includes(t.id)?'checked':''}></label>`).join('')}</fieldset><p id="editor-status" class="detail-muted" role="status"></p><div class="editor-footer"><button class="primary" id="save-resource">${id?'Save changes':'Add resource'}</button></div>`;
+  $('#resource-detail').scrollTop=0;
+  $('#cancel-resource-edit').onclick=()=>{if(leaveResourceEditor())renderResourceDetail();};
+  $('#resource-detail').oninput=e=>{if(resourceEditor&&!['editor-file','editor-source'].includes(e.target.id))resourceEditor.dirty=true;};
+  if($('#editor-source'))$('#editor-source').onchange=guard(e=>editResource(id,ed.kind,e.target.value));
+  if(ed.kind==='skill'){
+    $('#editor-file').onchange=()=>{ed.files[ed.current]=$('#editor-text').value;ed.current=$('#editor-file').value;$('#editor-text').value=ed.files[ed.current];};
+    $('#editor-add-file').onclick=()=>{const name=prompt('File name, relative to this skill:');if(!name)return;if(Object.hasOwn(ed.files,name)){toast('That file already exists',true);return;}ed.files[ed.current]=$('#editor-text').value;ed.files[name]='';ed.current=name;$('#editor-file').insertAdjacentHTML('beforeend',`<option>${esc(name)}</option>`);$('#editor-file').value=name;$('#editor-text').value='';ed.dirty=true;$('#editor-text').focus();};
+    $('#editor-remove-file').onclick=()=>{if(ed.current.toLowerCase()==='skill.md'){toast('SKILL.md is required',true);return;}ed.files[ed.current]=null;$('#editor-file').selectedOptions[0].remove();ed.current=$('#editor-file').value;$('#editor-text').value=ed.files[ed.current]||'';ed.dirty=true;};
+  }
+  $('#save-resource').onclick=async()=>{
+    try{
+      const body=editorBody();ed.busy=true;$('#resource-detail').querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=true);$('#editor-status').textContent='Saving…';
+      const plan=await api('/api/resources/change',body);
+      const result=await api('/api/resources/change',{...body,revision:plan.revision,apply:true});
+      resourceEditor=null;state.resourceId=result.id;state.toolTab=ed.kind;state.resourceSearch='';$('#resource-search').value='';$('#resource-detail').dataset.key='';await loadResources();selectResource(result.id);toast('Saved. Reconnect existing harness connections to load the update.');
+    }catch(error){if(resourceEditor===ed){ed.busy=false;$('#resource-detail').querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=false);$('#editor-status').textContent=error.message;}}
+  };
+  (id?$('#editor-text')||$('#editor-config'):$('#editor-name')).focus();
+}
+async function removeResource(id) {
+  const r=state.tools.resources.find(r=>r.id===id);
+  dialog(`Remove ${r.name}?`,'<p>Remove this shared item and its Perch-managed connections. External originals are preserved. You can restore it from Removed items.</p>','<button data-dismiss>Cancel</button><button class="primary" id="confirm-resource-remove">Remove shared item</button>');
+  $('#confirm-resource-remove').onclick=guard(async()=>{const b=$('#confirm-resource-remove');b.disabled=true;try{const body={id,action:'remove'},plan=await api('/api/resources/change',body);await api('/api/resources/change',{...body,revision:plan.revision,apply:true});$('#dialog').close();await loadResources();toast('Shared item removed');}finally{b.disabled=false;}});
+}
+async function removedResources() {
+  const data=await api('/api/resources/removed',{});
+  dialog('Removed items',data.items.length?data.items.map(r=>`<button class="navigation-row" data-restore-resource="${esc(r.id)}"><span>${esc(r.name)}<small>${esc(resourceKinds[r.kind])}</small></span><span>Restore</span></button>`).join(''):'<p>No removed items.</p>');
+  document.querySelectorAll('[data-restore-resource]').forEach(b=>b.onclick=guard(async()=>{b.disabled=true;try{const body={id:b.dataset.restoreResource,action:'restore'},plan=await api('/api/resources/change',body);await api('/api/resources/change',{...body,revision:plan.revision,apply:true});await removedResources();await loadResources();}finally{b.disabled=false;}}));
+}
+async function refreshResourceAuth(id) {
+  try{const data=await api('/api/mcp/auth',{id});if(state.resourceId!==id||!$('#resource-auth-status'))return;
+    $('#resource-auth-status').textContent=({'signed-in':'Signed in through Perch','signed-out':'Not signed in','refresh-needed':'Signed in · refresh on next connection',expired:'Sign-in expired'})[data.status]||data.status;
+    $('#resource-sign-out').hidden=!['signed-in','refresh-needed','expired'].includes(data.status);$('#resource-sign-in').hidden=data.status==='signed-in';
+  }catch(e){if(state.resourceId===id&&$('#resource-auth-status'))$('#resource-auth-status').textContent=e.message;}
+}
+async function signInResource(id) {
+  const job=await api('/api/mcp/auth',{id,action:'sign-in'});resourceAuthJob=job.id;
+  $('#resource-sign-in').hidden=true;$('#resource-cancel-auth').hidden=false;$('#resource-auth-status').textContent='Complete sign-in in your browser…';
+  clearTimeout(resourceAuthTimer);
+  const poll=async()=>{if(state.resourceId!==id||!$('#resource-auth-status'))return;try{const data=await api('/api/mcp/auth',{action:'job',job:job.id});if(data.status==='signing-in'){resourceAuthTimer=setTimeout(poll,1500);return;}$('#resource-cancel-auth').hidden=true;resourceAuthJob=null;await refreshResourceAuth(id);if(data.error)$('#resource-auth-status').textContent=data.error;}catch(e){$('#resource-auth-status').textContent=e.message;$('#resource-sign-in').hidden=false;$('#resource-cancel-auth').hidden=true;}};
+  await poll();
+}
 const resourceKinds={skill:'Skill',mcp:'MCP server',plugin:'Plugin'};
 function resourceIcon(kind) {
   const paths={skill:'<path d="M6 18C3 8 11 4 19 5c1 8-3 15-11 12M5 21 15 11M11 15v-4"/>',mcp:'<path d="M8 3v4m8-4v4M6 7h12v4a6 6 0 0 1-12 0V7Zm6 10v4"/>',plugin:'<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><path d="M14 17h6m-3-3v6"/>'};
@@ -324,6 +392,7 @@ function renderTools() {
   renderResourceDetail(previous!==state.resourceId);requestAnimationFrame(moveResourceIndicators);
 }
 function selectResource(id,{keyboard=false}={}) {
+  if(!leaveResourceEditor())return;
   if(!state.tools.resources.some(r=>r.id===id))return;
   const changed=id!==state.resourceId;state.resourceId=id;
   if(changed)state.resourceReview=null;
@@ -333,16 +402,18 @@ function selectResource(id,{keyboard=false}={}) {
   if(!keyboard&&getComputedStyle($('#resource-list-scroll')).display==='none'){$('#resource-detail').scrollTop=0;$('#resource-detail-title')?.focus({preventScroll:true});}
 }
 function renderResourceDetail(animate=false) {
+  if(resourceEditor)return;
   const r=state.tools.resources.find(r=>r.id===state.resourceId),detail=$('#resource-detail');
   if(!r){detail.dataset.key='';detail.innerHTML='<p class="empty-list">Select a resource to view its connections.</p>';$('#resource-workspace').classList.remove('detail-open');return;}
   const key=JSON.stringify([r,state.resourceReview]);if(detail.dataset.key===key)return;detail.dataset.key=key;
-  const labels={present:'Present',available:'Connect',review:'Review connection',blocked:'Needs attention',unsupported:'Unavailable',disabled:'Disabled',components:'Components'};
+  const labels={managed:'Not shared',present:'Present',available:'Connect',review:'Review connection',blocked:'Needs attention',unsupported:'Unavailable',disabled:'Disabled',components:'Components'};
   const components=state.tools.resources.filter(x=>x.plugin===r.id);
-  detail.innerHTML=`<button class="inline-action resource-back" id="resource-back">‹ Resources</button><div class="resource-detail-content"><div class="resource-identity"><span class="resource-emblem">${resourceIcon(r.kind)}</span><span>${esc(resourceKinds[r.kind]||r.kind)}${r.discovery==='cached'?' · Cached':''}</span></div><h2 id="resource-detail-title" tabindex="-1">${esc(r.name)}</h2>${r.plugin?`<button class="inline-action resource-parent" data-open-resource="${esc(r.plugin)}">${esc(state.tools.resources.find(x=>x.id===r.plugin)?.name||'Plugin')}</button>`:''}<div class="detail-section"><h3>${r.kind==='plugin'?'Components':'Harnesses'}</h3>${r.kind==='plugin'?(components.length?components.map(c=>`<button class="navigation-row" data-open-resource="${esc(c.id)}"><span>${esc(c.name)}<small>${esc(resourceKinds[c.kind]||c.kind)}</small></span><span class="row-chevron" aria-hidden="true">›</span></button>`).join(''):'<p class="detail-muted">No portable components detected.</p>'):state.tools.targets.map(t=>{
+  detail.innerHTML=`<button class="inline-action resource-back" id="resource-back">‹ Resources</button><div class="resource-detail-content"><div class="resource-identity"><span class="resource-emblem">${resourceIcon(r.kind)}</span><span>${esc(resourceKinds[r.kind]||r.kind)}${r.discovery==='cached'?' · Cached':''}</span></div><h2 id="resource-detail-title" tabindex="-1">${esc(r.name)}</h2>${['skill','mcp'].includes(r.kind)?`<div class="resource-edit-actions"><button class="inline-action" data-edit-resource="${esc(r.id)}">${r.managed?'Edit':'Edit in Perch'}</button>${r.managed?`<button class="inline-action" data-remove-resource="${esc(r.id)}">Remove…</button>`:''}</div>`:''}${r.managed&&r.kind==='mcp'&&r.authentication==='oauth'?'<div class="resource-auth"><span id="resource-auth-status" role="status">Checking sign-in…</span><button class="inline-action" id="resource-sign-in">Sign in</button><button class="inline-action" id="resource-sign-out" hidden>Sign out</button><button class="inline-action" id="resource-cancel-auth" hidden>Cancel</button></div>':''}${r.plugin?`<button class="inline-action resource-parent" data-open-resource="${esc(r.plugin)}">${esc(state.tools.resources.find(x=>x.id===r.plugin)?.name||'Plugin')}</button>`:''}<div class="detail-section"><h3>${r.kind==='plugin'?'Components':'Harnesses'}</h3>${r.kind==='plugin'?(components.length?components.map(c=>`<button class="navigation-row" data-open-resource="${esc(c.id)}"><span>${esc(c.name)}<small>${esc(resourceKinds[c.kind]||c.kind)}</small></span><span class="row-chevron" aria-hidden="true">›</span></button>`).join(''):'<p class="detail-muted">No portable components detected.</p>'):state.tools.targets.map(t=>{
     const c=r.compatibility[t.id]||{status:'unsupported',reason:'No compatibility information'},actionable=['review','available'].includes(c.status);
     const content=`<span class="harness-monogram" aria-hidden="true">${esc(t.name.slice(0,1))}</span><span class="harness-connection-label"><strong>${esc(t.name)}</strong>${['blocked','disabled','unsupported'].includes(c.status)&&c.reason?`<small>${esc(c.reason)}</small>`:''}</span><span class="connection-state ${c.status==='present'?'is-present':''}">${c.status==='present'?'<i aria-hidden="true"></i>':''}${esc(labels[c.status]||c.status)}${actionable?'<span aria-hidden="true"> ›</span>':''}</span>`;
     return actionable?`<button class="harness-connection" data-resource="${esc(r.id)}" data-destination="${esc(t.id)}">${content}</button>`:`<div class="harness-connection">${content}</div>`;
-  }).join('')}</div><div id="connection-review" class="connection-review" ${state.resourceReview?'':'hidden'}>${connectionReviewHtml()}</div><div class="detail-section resource-sources"><h3>Sources</h3>${Object.entries(r.origins).map(([h,path])=>`<div class="source-location"><strong>${esc(names[h]||h)}</strong>${path?`<span>${esc(path)}</span>`:''}</div>`).join('')}${r.kind==='skill'&&!r.plugin?`<button class="navigation-row source-review-link" data-inspect-skill="${esc(r.name)}"><span>Review shared source</span><span class="row-chevron" aria-hidden="true">›</span></button>`:''}</div></div>`;
+  }).join('')}</div><div id="connection-review" class="connection-review" ${state.resourceReview?'':'hidden'}>${connectionReviewHtml()}</div><div class="detail-section resource-sources"><h3>Sources</h3>${Object.entries(r.origins).map(([h,path])=>`<div class="source-location"><strong>${esc(names[h]||h)}</strong>${path?`<span>${esc(path)}</span>`:''}</div>`).join('')}${r.kind==='skill'&&!r.plugin&&!r.managed?`<button class="navigation-row source-review-link" data-inspect-skill="${esc(r.name)}"><span>Review shared source</span><span class="row-chevron" aria-hidden="true">›</span></button>`:''}</div></div>`;
+  if(r.managed&&r.kind==='mcp'&&r.authentication==='oauth')refreshResourceAuth(r.id);
   if(animate){detail.scrollTop=0;if(!matchMedia('(prefers-reduced-motion: reduce)').matches){detail.getAnimations().forEach(a=>a.cancel());detail.animate([{opacity:.35,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}],{duration:190,easing:'cubic-bezier(.2,.7,.2,1)'});}}
 }
 function connectionReviewHtml() {
@@ -425,6 +496,8 @@ function toggleResourceSearch(open=true) {
   $('#resource-find').hidden=!open;$('#toggle-resource-search').setAttribute('aria-expanded',String(open));
   if(open)$('#resource-search').focus();else{state.resourceSearch='';$('#resource-search').value='';renderTools();$('#toggle-resource-search').focus();}
 }
+document.querySelectorAll('[data-create-resource]').forEach(b=>b.onclick=guard(async()=>{b.closest('details').open=false;await editResource(null,b.dataset.createResource);}));
+$('#removed-resources').onclick=guard(async()=>{if(!leaveResourceEditor())return;$('.resource-add').open=false;await removedResources();});
 $('#toggle-resource-search').onclick=()=>toggleResourceSearch($('#resource-find').hidden);
 $('#resource-search').oninput=e=>{state.resourceSearch=e.target.value.toLowerCase();renderTools();};
 $('#resource-search').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();toggleResourceSearch(false);}};
@@ -436,6 +509,12 @@ $('#resource-rows').onkeydown=e=>{
   if(next!==undefined){e.preventDefault();selectResource(rows[Math.max(0,Math.min(rows.length-1,next))].dataset.selectResource,{keyboard:true});}
 };
 $('#resource-detail').onclick=guard(async e=>{
+  const edit=e.target.closest('[data-edit-resource]');if(edit){await editResource(edit.dataset.editResource);return;}
+  const remove=e.target.closest('[data-remove-resource]');if(remove){await removeResource(remove.dataset.removeResource);return;}
+  if(e.target.closest('#resource-sign-in')){await signInResource(state.resourceId);return;}
+  if(e.target.closest('#resource-sign-out')){await api('/api/mcp/auth',{id:state.resourceId,action:'sign-out'});await refreshResourceAuth(state.resourceId);return;}
+  if(e.target.closest('#resource-cancel-auth')&&resourceAuthJob){await api('/api/mcp/auth',{action:'cancel',job:resourceAuthJob});return;}
+
   const back=e.target.closest('#resource-back');if(back){$('#resource-workspace').classList.remove('detail-open');document.querySelector('[data-select-resource][aria-current="true"]')?.focus({preventScroll:true});return;}
   const other=e.target.closest('[data-open-resource]');if(other){state.toolTab='all';state.resourceSearch='';$('#resource-search').value='';state.resourceId=other.dataset.openResource;state.resourceReview=null;renderTools();selectResource(state.resourceId);return;}
   const skill=e.target.closest('[data-inspect-skill]');if(skill){await resolveSkill(skill.dataset.inspectSkill);return;}
@@ -473,7 +552,7 @@ addEventListener('pointerdown',e=>{if(!e.target.closest('#history'))closePromptP
 $('#history-live').onclick=liveHistory;
 $('#feed').onscroll=()=>{const f=$('#feed');state.follow=f.scrollHeight-f.scrollTop-f.clientHeight<60;if(state.follow)$('#follow').hidden=true;};
 $('#follow').onclick=()=>{$('#feed').scrollTop=$('#feed').scrollHeight;state.follow=true;$('#follow').hidden=true;};
-$('.tools-tabs').onclick=e=>{const b=e.target.closest('[data-tooltab]');if(b){state.toolTab=b.dataset.tooltab;state.resourceReview=null;$('#resource-workspace').classList.remove('detail-open');renderTools();}};
+$('.tools-tabs').onclick=e=>{const b=e.target.closest('[data-tooltab]');if(b){if(!leaveResourceEditor())return;state.toolTab=b.dataset.tooltab;state.resourceReview=null;$('#resource-workspace').classList.remove('detail-open');renderTools();}};
 new ResizeObserver(()=>requestAnimationFrame(moveResourceIndicators)).observe($('#resource-workspace'));
 new ResizeObserver(()=>requestAnimationFrame(moveResourceIndicators)).observe($('.tools-tabs'));
 $('#refresh-tools').onclick=guard(openTools);$('#preview-sync').onclick=guard(previewSync);

@@ -116,3 +116,24 @@ the real linking endpoint. Three dependency-free Node regressions cover out-of-o
 reviews, cancellation, repeated Apply clicks, navigation during application, and error
 recovery. The Python test suite includes these checks when Node is installed (CI has
 Node). Physical touch input and Windows WebView2 remain acceptance checks.
+
+## Direct resource editing — September 10, 2026
+
+The desktop now creates and edits Perch-owned skills and MCP definitions, chooses
+harness destinations, and removes/restores managed items. Browser fixtures exercised
+skill adoption and editing, removal, restoration, MCP creation, and the inline editor
+layout. Tests cover stale revisions, traversal rejection, external-source preservation,
+secret masking, transaction rollback and interruption recovery, changed native/registry
+entries, plugin component references, and suppression of automatic re-import.
+
+Two independent CLI bridge processes exercised MCP tools, resources, and prompts with
+the desktop absent. OAuth fixtures cover discovery, dynamic registration, PKCE and
+resource audience, callback state rejection, token reuse, concurrent refresh through
+the saved issuer, sign-out, and endpoint isolation. Credential tests impose Windows'
+per-entry size limit and inject a failed replacement. These use a fake OS store and
+provider; no real account sign-in or native credential-store acceptance is claimed.
+
+The packaged smoke checker now also exercises the bundled MCP bridge before starting
+the desktop backend. Real-provider OAuth, native Keychain/Credential Manager prompts,
+Windows GUI interaction, and provider-specific client registration remain acceptance
+checks. Existing harness OAuth sessions are not imported.
