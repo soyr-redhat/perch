@@ -33,7 +33,8 @@ def main():
         root = Path(temp)
         target = root / "sessions/context-target.jsonl"
         target.parent.mkdir()
-        target.write_text(json.dumps({"id": "context-target", "cwd": str(root), "role": "user", "text": "Destination"}) + "\n")
+        target.write_text("".join(json.dumps({"id": "context-target", "cwd": str(root), "role": role, "text": text}) + "\n"
+                                  for role, text in (("user", "Destination"), ("assistant", "Ready"))))
         os.utime(target, (time.time() - 60, time.time() - 60))
         (root / "settings.json").write_text(json.dumps({"harnesses": {"disabled": ["claude", "codex", "omp"]}}))
         (root / "sources.json").write_text(json.dumps({"sources": [{
