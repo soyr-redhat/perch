@@ -114,7 +114,13 @@ def _points_to(link: Path, target: Path) -> bool:
         return False
     raw = Path(os.readlink(link))
     destination = raw if raw.is_absolute() else link.parent / raw
-    return os.path.abspath(destination) == os.path.abspath(target)
+    actual = os.path.normcase(os.path.abspath(destination))
+    expected = os.path.normcase(os.path.abspath(target))
+    if actual.startswith("\\\\?\\"):
+        actual = actual[4:]
+    if expected.startswith("\\\\?\\"):
+        expected = expected[4:]
+    return actual == expected
 
 
 def skill_inventory(roots=None) -> list:
