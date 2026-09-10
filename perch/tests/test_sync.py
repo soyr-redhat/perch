@@ -53,7 +53,10 @@ class SkillsTest(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(claude, "gamma", "SKILL.md")))
             registry = Path(sync.PERCH_DIR) / "shared" / "skills"
             self.assertEqual(os.path.realpath(registry / "alpha"), os.path.realpath(os.path.join(claude, "alpha")))
-            self.assertEqual(os.path.abspath(os.readlink(os.path.join(codex, "alpha"))), str(registry / "alpha"))
+            target = os.path.abspath(os.readlink(os.path.join(codex, "alpha")))
+            if target.startswith("\\\\?\\"):
+                target = target[4:]
+            self.assertEqual(os.path.normcase(target), os.path.normcase(str(registry / "alpha")))
 
             # second run is idempotent: everything already present
             again = sync.sync_skills(roots=roots, targets=("claude", "codex"))
