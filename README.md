@@ -67,7 +67,7 @@ Review one connection with `perch-cli --link RESOURCE_ID --target codex`, using 
 
 ### Editing in Perch
 
-Select a skill or MCP server and choose **Edit in Perch**. The first save creates a Perch-owned resource; later edits update it directly. Skills support `SKILL.md` and supporting UTF-8 text files. Original external source folders are preserved. Choose the harnesses that should receive the shared version in the same editor.
+Select a skill or MCP server and choose **Edit in Perch**. The first save creates a Perch-owned resource; later edits update it directly. Skills support `SKILL.md` and supporting UTF-8 text files. The editor wraps long lines and highlights Markdown, YAML frontmatter, YAML, and JSON. Tab indents with spaces; Shift+Tab outdents. Escape followed by Tab moves focus out of the editor. **Format** (Option+Shift+F on macOS, Alt+Shift+F on Windows) formats the current document locally and supports Undo. Original external source folders are preserved. Choose the harnesses that should receive the shared version in the same editor.
 
 The **+** menu adds a skill or MCP server. **Remove…** disconnects Perch-managed entries and hides the item from automatic sharing. **+ → Removed items** restores it. Unrelated or externally changed harness entries are preserved. Edits check for concurrent changes and use a recovery journal; interrupted saves are restored before the next mutation. Owned skill versions and backups remain in `~/.perch/managed` and hidden sibling backups.
 
@@ -111,6 +111,7 @@ Exporting does not send a message or merge project files. A local reference work
 perch/
   src/perch/        application, desktop lifecycle, and interface assets
   tests/            unit, runtime, installer, and harness fixtures
+  frontend/         editor source, pinned dependencies, and reproducible asset build
   packaging/        PyInstaller and Windows installer definitions
   scripts/          packaged-app and performance checks
   docs/             interoperability, validation, and performance details
@@ -136,6 +137,16 @@ On Windows PowerShell, use `.venv\Scripts\python` in place of `.venv/bin/python`
 node --check perch/src/perch/static/app.js
 .venv/bin/python -m PyInstaller perch/packaging/perch.spec --noconfirm
 ```
+
+Editor assets are bundled in the source tree; installed applications need neither Node nor network access for editing. To change the editor or formatter, rebuild its assets and run its tests:
+
+```sh
+npm ci --prefix perch/frontend
+npm run --prefix perch/frontend build
+npm run --prefix perch/frontend test
+```
+
+CI checks that generated assets match their source. Formatting loads on demand in a worker; invalid input and interrupted formatting preserve the draft.
 
 ## Details
 

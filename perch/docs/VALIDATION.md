@@ -137,3 +137,19 @@ The packaged smoke checker now also exercises the bundled MCP bridge before star
 the desktop backend. Real-provider OAuth, native Keychain/Credential Manager prompts,
 Windows GUI interaction, and provider-specific client registration remain acceptance
 checks. Existing harness OAuth sessions are not imported.
+
+## Source editor — September 10, 2026
+
+CodeMirror provides soft wrapping, Markdown/YAML/JSON highlighting, editable YAML
+frontmatter, two-space Tab indentation, Shift+Tab outdent, normal Enter behavior,
+and per-file selection/undo history. Escape followed by Tab releases keyboard focus.
+Prettier runs on demand in a local worker with a 15-second timeout. Formatting is
+undoable; stale replies cannot replace changed text, another file, or a closed editor.
+
+Six Node editor regressions exercise keyboard events, wrapping configuration,
+frontmatter parsing, file history, formatting errors, Markdown hard breaks, YAML
+comments, and stale-format protection. Browser fixtures verified Tab/Undo, worker
+formatting under the application's CSP, YAML file switching, saving formatted skills,
+and wrapping/contrast in both themes. The document uses the existing detail scrollbar;
+Save remains above the document. Physical touch and native Windows editor interaction
+remain acceptance checks. CI rebuilds and compares the committed offline assets.
