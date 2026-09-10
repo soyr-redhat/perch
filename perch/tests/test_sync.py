@@ -10,7 +10,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import sync
+from perch import sync
 
 
 def make_skill(root, name):

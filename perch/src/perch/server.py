@@ -270,11 +270,11 @@ class Handler(BaseHTTPRequestHandler):
             self._history()
         elif path == "/api/tools":
             if self.server.demo:
-                import demo
+                from . import demo
 
                 self._json(200, demo.tools())
                 return
-            import sync
+            from . import sync
 
             try:
                 self._json(200, sync.overview())
@@ -312,12 +312,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _settings(self):
         if self.server.demo:
-            import demo
+            from . import demo
 
             self._json(200, demo.config(self.scanner))
             return
-        import settings as settings_mod
-        import sync as sync_mod
+        from . import settings as settings_mod
+        from . import sync as sync_mod
 
         harnesses = [
             {
@@ -420,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/sync":
             self._sync(body)
         elif path == "/api/tools":
-            import sync
+            from . import sync
 
             try:
                 self._json(200, sync.overview())
@@ -432,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "unknown route"})
 
     def _save_settings(self, body: dict):
-        import settings as settings_mod
+        from . import settings as settings_mod
 
         try:
             cfg = settings_mod.patch(settings_mod.load(), body)
@@ -478,7 +478,7 @@ class Handler(BaseHTTPRequestHandler):
     def _deliver(self, agent_id: str, entry: dict, argv: list[str], cwd: str):
         proc = None
         try:
-            from term import external_process_env
+            from .term import external_process_env
 
             with self.server.delivery_lock:
                 if self.server.stop_event.is_set():
@@ -499,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                 entry["completed"] = True
         except (OSError, subprocess.TimeoutExpired) as exc:
             if proc:
-                from term import terminate_process
+                from .term import terminate_process
 
                 terminate_process(proc)
             self.pending.fail(agent_id, entry, str(exc)[:300])
@@ -511,8 +511,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sync(self, body):
         try:
-            import settings as settings_mod
-            import sync as sync_mod
+            from . import settings as settings_mod
+            from . import sync as sync_mod
 
             sharing = settings_mod.load()["sharing"]
             dry_run = body.get("preview", True) is not False
@@ -663,7 +663,7 @@ class PerchServer(ThreadingHTTPServer):
         self.server_close()
         self.scanner.close()
         self.terms.shutdown()
-        from term import terminate_process
+        from .term import terminate_process
 
         with self.delivery_lock:
             procs = list(self.deliveries)

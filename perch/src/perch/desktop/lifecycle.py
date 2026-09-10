@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import urllib.request
-from storage import DATA_DIR, write_json
+from ..storage import DATA_DIR, write_json
 
 
 def extend_path():

@@ -17,7 +17,6 @@ import uuid
 import signal
 import contextlib
 import sys
-from pathlib import Path
 
 IS_WIN = platform.system() == "Windows"
 BACKLOG_CAP = 96 * 1024
@@ -124,7 +123,7 @@ class Pty:
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
             try:
-                executable = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, str(Path(__file__).with_name("perch.py"))]
+                executable = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "perch"]
                 self._p = subprocess.Popen(
                     [*executable, "--perch-pty-child", *argv],
                     cwd=cwd or None,

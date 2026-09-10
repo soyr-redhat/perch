@@ -8,12 +8,12 @@ import sys
 import threading
 import webbrowser
 
-from desktop.lifecycle import Instance, extend_path
-from scanner import Scanner
-from server import serve
-from storage import DATA_DIR
-from term import TermRegistry
-import settings
+from .desktop.lifecycle import Instance, extend_path
+from .scanner import Scanner
+from .server import serve
+from .storage import DATA_DIR
+from .term import TermRegistry
+from . import settings
 
 
 def run_app(url, httpd):
@@ -79,7 +79,7 @@ def run_app(url, httpd):
 
 
 def auto_share(stop):
-    from sync import fingerprint, sync_all
+    from .sync import fingerprint, sync_all
 
     previous = None
     while not stop.wait(30):
@@ -113,14 +113,14 @@ def parser():
 
 def main():
     if sys.argv[1:2] == ["--perch-pty-child"]:
-        from term import exec_pty_child
+        from .term import exec_pty_child
 
         exec_pty_child(sys.argv[2:])
     args = parser().parse_args()
     extend_path()
     cfg = settings.load()
     if args.sync or args.dry_run or args.tools:
-        from sync import overview, sync_all
+        from .sync import overview, sync_all
 
         sharing = cfg["sharing"]
         result = (
@@ -160,7 +160,7 @@ def main():
     server = None
     try:
         if args.demo:
-            from demo import DemoScanner
+            from .demo import DemoScanner
 
             scanner = DemoScanner()
         else:

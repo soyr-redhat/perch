@@ -12,11 +12,8 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-import perch
-import scanner
-import server
-import sync
-from term import Pty, TermRegistry
+from perch import app, scanner, server, sync
+from perch.term import Pty, TermRegistry
 
 
 class TranscriptContractTests(unittest.TestCase):
@@ -80,8 +77,8 @@ class SharingContractTests(unittest.TestCase):
         stop = Mock()
         stop.wait.side_effect = [False, False, True]
         cfg = {"sharing": {"autoSync": True, "skills": True, "mcp": True, "targets": ["codex"]}}
-        with patch("settings.load", return_value=cfg), patch("sync.fingerprint", return_value="same"), patch("sync.sync_all", return_value={"skills": {"errors": ["Temporary I/O failure"]}, "mcp": {"errors": []}}) as apply:
-            perch.auto_share(stop)
+        with patch("perch.settings.load", return_value=cfg), patch("perch.sync.fingerprint", return_value="same"), patch("perch.sync.sync_all", return_value={"skills": {"errors": ["Temporary I/O failure"]}, "mcp": {"errors": []}}) as apply:
+            app.auto_share(stop)
         self.assertEqual(apply.call_count, 2)
 
     def test_backup_preserves_windows_line_endings(self):
@@ -119,7 +116,7 @@ class SharingContractTests(unittest.TestCase):
     def test_cli_signals_partial_failure(self):
         report = {"skills": {"errors": []}, "mcp": {"errors": [{"reason": "write failed"}]}}
         with patch.object(sys, "argv", ["perch", "--sync"]), patch.object(sync, "sync_all", return_value=report), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(perch.main(), 1)
+            self.assertEqual(app.main(), 1)
 
 
 class TerminalContractTests(unittest.TestCase):

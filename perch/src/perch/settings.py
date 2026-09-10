@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import math
-from storage import DATA_DIR, sync_lock, write_json
+from .storage import DATA_DIR, sync_lock, write_json
 
 PATH = str(DATA_DIR / "settings.json")
 LAST_SYNC = str(DATA_DIR / "last-sync.json")

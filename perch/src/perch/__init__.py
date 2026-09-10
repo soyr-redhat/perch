@@ -1,0 +1,1 @@
+"""Perch desktop workspace package."""

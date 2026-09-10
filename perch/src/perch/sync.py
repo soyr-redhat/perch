@@ -15,7 +15,7 @@ import subprocess
 import time
 import tomlkit
 
-from storage import DATA_DIR, atomic_write, sync_lock, write_json
+from .storage import DATA_DIR, atomic_write, sync_lock, write_json
 
 PERCH_DIR = str(DATA_DIR)
 MANIFEST = str(DATA_DIR / "sync-manifest.json")

@@ -11,12 +11,9 @@ import urllib.error
 import urllib.request
 from unittest.mock import patch
 
-import scanner
-import server
-import settings
-import sync
-from term import TermRegistry
-from demo import DemoScanner
+from perch import app, scanner, server, settings, sync
+from perch.term import TermRegistry
+from perch.demo import DemoScanner
 
 
 class ScannerTests(unittest.TestCase):
@@ -324,8 +321,7 @@ class TerminalTests(unittest.TestCase):
 class CliDesktopSharingTests(unittest.TestCase):
     def test_cli_preview_and_desktop_apply_share_one_contract(self):
         import contextlib
-        import perch
-        import storage
+        from perch import storage
         import sys
 
         with tempfile.TemporaryDirectory() as temp, contextlib.ExitStack() as stack:
@@ -354,7 +350,7 @@ class CliDesktopSharingTests(unittest.TestCase):
             )
             output = io.StringIO()
             with patch.object(sys, "argv", ["perch", "--dry-run"]), contextlib.redirect_stdout(output):
-                perch.main()
+                app.main()
             cli_plan = json.loads(output.getvalue())
             self.assertFalse(Path(paths["codex"]).exists())
             host = server.serve(DemoScanner(), TermRegistry(), 0)

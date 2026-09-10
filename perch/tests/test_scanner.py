@@ -6,7 +6,7 @@ Run: python -m unittest test_scanner -v
 
 import unittest
 
-from scanner import ClaudeAdapter, CodexAdapter, FileState, OmpAdapter
+from perch.scanner import ClaudeAdapter, CodexAdapter, FileState, OmpAdapter
 
 
 def feed(adapter, records):

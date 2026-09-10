@@ -13,8 +13,8 @@ import tracemalloc
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-import scanner  # noqa: E402
+sys.path.insert(0, str(ROOT / "src"))
+from perch import scanner  # noqa: E402
 
 
 def measure(fn, repeat=5):
@@ -29,7 +29,7 @@ def measure(fn, repeat=5):
 def main():
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
-        original = subprocess.check_output(["git", "show", "6c1499e:scanner.py"], cwd=ROOT, text=True)
+        original = subprocess.check_output(["git", "show", "6c1499e:scanner.py"], cwd=ROOT.parent, text=True)
         module_path = root / "baseline.py"
         module_path.write_text(original)
         spec = importlib.util.spec_from_file_location("baseline_scanner", module_path)

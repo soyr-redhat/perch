@@ -1,6 +1,6 @@
 # Performance validation
 
-Synthetic benchmark on the development Mac with Python 3.14.3, compared against the initial repository commit. Run `python scripts/benchmark.py` to reproduce. No live agent files are read.
+Synthetic benchmark on the development Mac with Python 3.14.3, compared against the initial repository commit. Run `python scripts/benchmark.py` from the `perch` project directory to reproduce. No live agent files are read.
 
 | Operation | Initial implementation | Updated implementation |
 |---|---:|---:|

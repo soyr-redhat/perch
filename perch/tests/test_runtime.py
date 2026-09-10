@@ -14,12 +14,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-import scanner
-import server
-import settings
-import storage
-import sync
-from term import TermRegistry
+from perch import scanner, server, settings, storage, sync
+from perch.term import TermRegistry
 
 
 class Workspace:

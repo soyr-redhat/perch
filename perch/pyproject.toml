@@ -13,14 +13,16 @@ dependencies = ["pywebview>=6.2,<7", "tomlkit>=0.13,<1", "watchdog>=6,<7", "pywi
 dev = ["pyinstaller>=6.22,<7", "ruff>=0.12,<1", "pillow>=11,<13"]
 
 [project.scripts]
-perch = "perch:main"
+perch = "perch.app:main"
 
 [tool.setuptools]
-py-modules = ["perch", "scanner", "server", "settings", "sync", "term", "storage", "demo"]
-packages = ["desktop", "static"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.setuptools.package-data]
-static = ["*.html", "*.css", "*.js", "*.svg", "licenses/*.txt"]
+perch = ["static/*", "static/licenses/*"]
 
 [tool.ruff]
 line-length = 110

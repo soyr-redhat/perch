@@ -1,10 +1,10 @@
-"""Interactive QA fixture: python -m tests.serve_fixture DIRECTORY."""
+"""Interactive QA fixture: python perch/tests/serve_fixture.py DIRECTORY."""
 
 import json
 from pathlib import Path
 import sys
 import time
-from tests.test_runtime import Workspace
+from test_runtime import Workspace
 
 
 def main():
