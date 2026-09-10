@@ -41,6 +41,13 @@ perch-cli --demo
 
 `PERCH_DATA_DIR` changes Perch’s own local state directory (default `~/.perch`). Optional declarative session adapters belong in `~/.perch/sources.json`.
 
+Shared tool state lives alongside it:
+
+- `~/.perch/shared/skills/<name>` links each compatible skill to its detected source. Perch-managed harness skill directories link through this location, so an edit is immediately shared.
+- `~/.perch/shared/mcp/servers.json` stores portable MCP definitions. Perch writes compatible entries into each harness’s native configuration when you apply sharing.
+
+Existing user-managed links and configuration remain in place. Plugin installations, hooks, custom agents, and sign-in state stay with their own harnesses.
+
 ## Repository layout
 
 ```text

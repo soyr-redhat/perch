@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import time
 import tomlkit
@@ -47,14 +46,15 @@ TARGET_NAMES = {
 }
 
 
-def _link_dir(target: str, link: str) -> str:
+def _link_dir(target: str, link: str, resolve=True) -> str:
+    target_path = os.path.realpath(target) if resolve else os.path.abspath(target)
     try:
-        os.symlink(os.path.realpath(target), link, target_is_directory=True)
+        os.symlink(target_path, link, target_is_directory=True)
         return "symlink"
     except OSError:
         if os.name != "nt":
             raise
-        link_path, source_path = os.path.normpath(link), os.path.realpath(target)
+        link_path, source_path = os.path.normpath(link), target_path
         if any(char in link_path + source_path for char in ('"', "%", "\r", "\n")):
             raise ValueError("Windows junction paths cannot contain quotes or environment substitutions")
         command = f'cmd.exe /d /c mklink /J "{link_path}" "{source_path}"'
@@ -73,8 +73,48 @@ def _load_manifest():
 
 def _record_links(created: list[dict]) -> None:
     doc = _load_manifest()
-    doc["created"].extend(created)
+    existing = {entry.get("link"): entry for entry in doc["created"] if isinstance(entry, dict)}
+    for entry in created:
+        existing[entry["link"]] = entry
+    doc["created"] = list(existing.values())
     write_json(MANIFEST, doc)
+
+
+def _shared_skill_root() -> Path:
+    return Path(PERCH_DIR) / "shared" / "skills"
+
+
+def _managed_links(doc: dict) -> set[str]:
+    return {
+        entry["link"]
+        for entry in doc.get("created", [])
+        if isinstance(entry, dict) and isinstance(entry.get("link"), str)
+    }
+
+
+def _remove_managed_link(link: Path) -> None:
+    if link.is_symlink():
+        link.unlink()
+    else:  # A Windows junction is a directory even though Perch created it as a link.
+        link.rmdir()
+
+
+def _replace_managed_link(link: Path, target: Path) -> str:
+    previous = os.path.realpath(link)
+    _remove_managed_link(link)
+    try:
+        return _link_dir(str(target), str(link), resolve=False)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        _link_dir(previous, str(link))
+        raise
+
+
+def _points_to(link: Path, target: Path) -> bool:
+    if not link.is_symlink():
+        return False
+    raw = Path(os.readlink(link))
+    destination = raw if raw.is_absolute() else link.parent / raw
+    return os.path.abspath(destination) == os.path.abspath(target)
 
 
 def skill_inventory(roots=None) -> list:
@@ -95,12 +135,13 @@ def skill_inventory(roots=None) -> list:
 def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
     roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
     inventory = skill_inventory(roots)
-    report = {"linked": [], "present": [], "conflicts": [], "errors": [], "total": len(inventory)}
+    report = {"linked": [], "registered": [], "present": [], "conflicts": [], "errors": [], "total": len(inventory)}
     try:
-        _load_manifest()
+        manifest = _load_manifest()
     except (OSError, ValueError) as exc:
         report["errors"].append({"source": "Perch", "reason": f"Cannot read sync manifest: {type(exc).__name__}"})
         return report
+    managed = _managed_links(manifest)
     created = []
     for skill in inventory:
         origins = skill["origins"]
@@ -111,13 +152,39 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
             )
             continue
         source = next(iter(variants))
+        registry = _shared_skill_root() / skill["name"]
+        if os.path.lexists(registry):
+            if os.path.realpath(registry) != source:
+                report["conflicts"].append(
+                    {"skill": skill["name"], "reason": "Perch registry already points to a different source"}
+                )
+                continue
+        else:
+            entry = {"skill": skill["name"], "kind": "registry"}
+            try:
+                if not dry_run:
+                    registry.parent.mkdir(parents=True, exist_ok=True)
+                    entry["kind"] = _link_dir(source, str(registry))
+                    created.append({"link": str(registry), "target": source, "kind": entry["kind"], "ts": time.time()})
+                report["registered"].append(entry)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                report["errors"].append({"skill": skill["name"], "source": "Perch", "reason": str(exc)})
+                continue
         for target in targets:
             if target not in roots:  # Claude Desktop does not have this skills-directory contract.
                 continue
             dest = Path(roots[target]) / skill["name"]
             if os.path.lexists(dest):
                 if os.path.realpath(dest) == source:
-                    if os.path.join(os.path.realpath(dest.parent), dest.name) != source:
+                    if str(dest) in managed and not _points_to(dest, registry):
+                        try:
+                            if not dry_run:
+                                kind = _replace_managed_link(dest, registry)
+                                created.append({"link": str(dest), "target": str(registry), "kind": kind, "ts": time.time()})
+                            report["linked"].append({"skill": skill["name"], "into": target, "kind": "registry"})
+                        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                            report["errors"].append({"skill": skill["name"], "into": target, "reason": str(exc)})
+                    elif os.path.join(os.path.realpath(dest.parent), dest.name) != source:
                         report["present"].append({"skill": skill["name"], "into": target})
                 else:
                     report["conflicts"].append(
@@ -128,9 +195,9 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
             try:
                 if not dry_run:
                     dest.parent.mkdir(parents=True, exist_ok=True)
-                    entry["kind"] = _link_dir(source, str(dest))
+                    entry["kind"] = _link_dir(str(registry), str(dest), resolve=False)
                     created.append(
-                        {"link": str(dest), "target": source, "kind": entry["kind"], "ts": time.time()}
+                        {"link": str(dest), "target": str(registry), "kind": entry["kind"], "ts": time.time()}
                     )
                 report["linked"].append(entry)
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -156,6 +223,29 @@ def _paths(paths=None):
         result = {key: str(root / (".missing-" + key)) for key in result}
     result.update(paths or {})
     return result
+
+
+def _mcp_registry(paths=None) -> Path:
+    if paths is None:
+        return Path(PERCH_DIR) / "shared" / "mcp" / "servers.json"
+    root = Path(next(iter(paths.values()))).parent if paths else Path(PERCH_DIR)
+    return root / ".perch" / "shared" / "mcp" / "servers.json"
+
+
+def _load_mcp_registry(path: Path) -> tuple[bytes, dict]:
+    raw = path.read_bytes() if path.exists() else b""
+    if not raw.strip():
+        return raw, {}
+    doc = json.loads(raw)
+    servers = doc.get("servers") if isinstance(doc, dict) else None
+    if not isinstance(servers, dict):
+        raise ValueError("Perch MCP registry must contain a servers object")
+    normalized = {}
+    for name, cfg in servers.items():
+        if not isinstance(name, str):
+            raise ValueError("Perch MCP registry server names must be text")
+        normalized[name] = _norm_server(cfg, "perch")
+    return raw, normalized
 
 
 def _load(path, toml=False):
@@ -243,8 +333,9 @@ def _backup(path):
 
 
 def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False) -> dict:
+    registry_path = _mcp_registry(paths)
     paths = _paths(paths)
-    report = {"found": 0, "sources": {}, "added": {}, "conflicts": [], "blocked": [], "errors": []}
+    report = {"found": 0, "sources": {}, "registered": [], "added": {}, "conflicts": [], "blocked": [], "errors": []}
     loaded, union, ambiguous, unavailable = {}, {}, set(), set()
     for source, path in paths.items():
         # Custom fixture callers can omit desktop without accessing real desktop configuration.
@@ -269,11 +360,33 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False) -> d
             report["errors"].append(
                 {"source": source, "reason": f"Cannot read {Path(path).name}: {type(exc).__name__}"}
             )
+    try:
+        registry_raw, registry_servers = _load_mcp_registry(registry_path)
+    except (ValueError, OSError) as exc:
+        report["errors"].append({"source": "Perch", "reason": f"Cannot read MCP registry: {type(exc).__name__}"})
+        return report
+    for name, cfg in registry_servers.items():
+        if name in union and union[name] != cfg:
+            ambiguous.add(name)
+        else:
+            union[name] = cfg
     for name in sorted(ambiguous):
         report["conflicts"].append(
             {"server": name, "reason": "Different definitions; existing versions preserved"}
         )
     report["found"] = len(union)
+    registry = dict(registry_servers)
+    for name, cfg in union.items():
+        if name not in ambiguous and name not in unavailable and name not in registry:
+            registry[name] = cfg
+            report["registered"].append(name)
+    if report["registered"] and not dry_run:
+        try:
+            text = json.dumps({"version": 1, "servers": registry}, indent=2, sort_keys=True) + "\n"
+            atomic_write(registry_path, text, expected=registry_raw)
+        except (ValueError, OSError) as exc:
+            report["errors"].append({"source": "Perch", "reason": str(exc)})
+            return report
     for target in targets:
         if target not in loaded or target not in TARGET_NAMES:
             continue
@@ -312,6 +425,7 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False) -> d
 
 
 def mcp_overview(paths=None):
+    registry_path = _mcp_registry(paths)
     servers = {}
     for source, path in _paths(paths).items():
         try:
@@ -334,15 +448,36 @@ def mcp_overview(paths=None):
             item["presentIn"].append(source)
             if cfg.get("enabled") is False or cfg.get("disabled") is True:
                 item["disabledIn"].append(source)
+    try:
+        _, registry = _load_mcp_registry(registry_path)
+    except (OSError, ValueError):
+        registry = {}
+    for name, cfg in registry.items():
+        servers.setdefault(
+            name,
+            {
+                "name": name,
+                "transport": "HTTP" if cfg.get("url") else "stdio",
+                "origin": "perch",
+                "presentIn": [],
+                "disabledIn": [],
+            },
+        )
     return sorted(servers.values(), key=lambda x: x["name"].casefold())
 
 
 def fingerprint():
     digest = hashlib.sha256()
+    manifest = Path(MANIFEST)
+    digest.update(str(manifest).encode())
+    digest.update(manifest.read_bytes() if manifest.is_file() else b"")
     for path in _paths().values():
         p = Path(path)
         digest.update(str(p).encode())
         digest.update(p.read_bytes() if p.is_file() else b"")
+    registry = _mcp_registry()
+    digest.update(str(registry).encode())
+    digest.update(registry.read_bytes() if registry.is_file() else b"")
     for item in skill_inventory():
         digest.update(json.dumps(item, sort_keys=True).encode())
         for root in set(item["origins"].values()):
@@ -361,10 +496,10 @@ def sync_all(skills=True, mcp=True, targets=SKILL_TARGETS, dry_run=False, revisi
         report = {
             "skills": sync_skills(targets=targets, dry_run=dry_run)
             if skills
-            else {"linked": [], "conflicts": [], "errors": [], "total": 0},
+            else {"linked": [], "registered": [], "present": [], "conflicts": [], "errors": [], "total": 0},
             "mcp": sync_mcp(targets=targets, dry_run=dry_run)
             if mcp
-            else {"found": 0, "added": {}, "conflicts": [], "blocked": [], "errors": []},
+            else {"found": 0, "registered": [], "added": {}, "conflicts": [], "blocked": [], "errors": []},
             "dryRun": dry_run,
             "revision": plan_id,
             "ts": time.time(),
@@ -382,21 +517,8 @@ def overview():
         "notes": [
             "Codex CLI and desktop share their user configuration.",
             "Skill links share edits immediately. Restart a harness if it does not refresh tools.",
+            "Skills and portable MCP servers are managed through Perch's shared registry.",
             "OAuth sign-ins, plugin installations, hooks and custom agents remain owned by each harness.",
             "Custom tool commands are transferable when packaged as stdio MCP servers.",
         ],
     }
-
-
-def _strip_mcp_sections(text):
-    """Legacy helper retained for callers; never used by the sharing engine."""
-    out, skipping = [], False
-    for line in text.splitlines():
-        if re.match(r"^\s*\[\s*mcp_servers(?:\..*)?\]\s*$", line):
-            skipping = True
-            continue
-        if skipping and re.match(r"^\s*\[", line):
-            skipping = False
-        if not skipping:
-            out.append(line)
-    return "\n".join(out).rstrip() + "\n"

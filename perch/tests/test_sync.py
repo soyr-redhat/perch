@@ -25,9 +25,13 @@ class SkillsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        patcher = patch.object(sync, "MANIFEST", os.path.join(self.tmp.name, "manifest.json"))
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.patchers = [
+            patch.object(sync, "MANIFEST", os.path.join(self.tmp.name, "manifest.json")),
+            patch.object(sync, "PERCH_DIR", os.path.join(self.tmp.name, "state")),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_union_links(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -47,11 +51,28 @@ class SkillsTest(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(codex, "alpha", "SKILL.md")))
             self.assertTrue(os.path.isfile(os.path.join(codex, "beta", "SKILL.md")))
             self.assertTrue(os.path.isfile(os.path.join(claude, "gamma", "SKILL.md")))
+            registry = Path(sync.PERCH_DIR) / "shared" / "skills"
+            self.assertEqual(os.path.realpath(registry / "alpha"), os.path.realpath(os.path.join(claude, "alpha")))
+            self.assertEqual(os.path.abspath(os.readlink(os.path.join(codex, "alpha"))), str(registry / "alpha"))
 
             # second run is idempotent: everything already present
             again = sync.sync_skills(roots=roots, targets=("claude", "codex"))
             self.assertEqual(again["linked"], [])
             self.assertEqual(len(again["present"]), 3)
+
+    @unittest.skipIf(os.name == "nt", "junction target inspection is POSIX-specific")
+    def test_managed_direct_link_migrates_to_registry(self):
+        roots = {name: os.path.join(self.tmp.name, name) for name in ("claude", "codex")}
+        for root in roots.values():
+            os.makedirs(root)
+        source = make_skill(roots["claude"], "review")
+        direct = os.path.join(roots["codex"], "review")
+        os.symlink(source, direct)
+        Path(sync.MANIFEST).write_text(json.dumps({"created": [{"link": direct, "target": source}]}))
+
+        sync.sync_skills(roots=roots, targets=("codex",))
+
+        self.assertEqual(os.path.abspath(os.readlink(direct)), str(Path(sync.PERCH_DIR) / "shared" / "skills" / "review"))
 
 
 class McpTest(unittest.TestCase):
@@ -108,15 +129,31 @@ class McpTest(unittest.TestCase):
             again = sync.sync_mcp(paths=paths)
             self.assertEqual(again["added"], {})
 
-    def test_strip_mcp_sections(self):
-        text = (
-            '[projects.a]\nx = 1\n\n[mcp_servers.one]\ncommand = "c"\n\n'
-            '[mcp_servers.one.env]\nK = "v"\n\n[windows]\ny = 2\n'
-        )
-        stripped = sync._strip_mcp_sections(text)
-        self.assertIn("[projects.a]", stripped)
-        self.assertIn("[windows]", stripped)
-        self.assertNotIn("mcp_servers", stripped)
+            registry = json.loads(sync._mcp_registry(paths).read_text())
+            self.assertEqual(registry["servers"]["github"]["command"], "docker")
+
+    def test_registry_is_a_source_for_missing_harness_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = {name: os.path.join(tmp, name + ".json") for name in ("claude", "omp")}
+            registry = sync._mcp_registry(paths)
+            registry.parent.mkdir(parents=True)
+            registry.write_text(json.dumps({"version": 1, "servers": {"shared": {"command": "fixture"}}}))
+
+            report = sync.sync_mcp(paths=paths, targets=("claude", "omp"))
+
+            self.assertEqual(report["added"], {"claude": ["shared"], "omp": ["shared"]})
+
+    def test_invalid_registry_leaves_harness_files_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = {"claude": os.path.join(tmp, "claude.json")}
+            registry = sync._mcp_registry(paths)
+            registry.parent.mkdir(parents=True)
+            registry.write_text('{"servers": []}')
+
+            report = sync.sync_mcp(paths=paths, targets=("claude",))
+
+            self.assertTrue(report["errors"])
+            self.assertFalse(Path(paths["claude"]).exists())
 
 
 if __name__ == "__main__":

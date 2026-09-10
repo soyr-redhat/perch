@@ -4,7 +4,7 @@ This audit covers the desktop workspace, release installers, and activity naviga
 
 ## Reproducible checks
 
-Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check src/perch/static/app.js` from the `perch` project directory. The suite currently contains 69 tests. Runtime tests use temporary configurations and a local fixture CLI that never contacts a model. The same tests run on macOS and Windows in GitHub Actions.
+Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check src/perch/static/app.js` from the `perch` project directory. The suite currently contains 71 tests. Runtime tests use temporary configurations and a local fixture CLI that never contacts a model. The same tests run on macOS and Windows in GitHub Actions.
 
 `scripts/check_packaged.py <packaged-cli>` exercises the built executable, second-launch activation, authenticated backend, WebSocket input, a real terminal child, recorded output, headless replies, and terminal cleanup. This catches runtime failures that an import or `--version` check misses.
 
@@ -12,7 +12,7 @@ Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check
 |---|---|
 | Session parsing | Claude/Codex/omp representative records; multiple text blocks; context scaffolding; malformed records; partial JSONL appends; file replacement; declarative source validation |
 | Performance contracts | Unchanged files are not reopened; unchanged snapshots compare equal; indexed history reaches first, middle, and latest prompts, including beyond the old history limit |
-| Sharing | CLI preview to desktop apply; additive writes; TOML comments and unrelated fields; byte-preserving backups; conflicting names; unsupported transport fields; invalid destinations; stale previews; idempotence; corrupt manifests; retry after reported I/O failure |
+| Sharing | CLI preview to desktop apply; additive writes; Perch registry migration and registry-only MCP sources; TOML comments and unrelated fields; byte-preserving backups; conflicting names; unsupported transport fields; invalid destinations; stale previews; idempotence; corrupt manifests and registries; retry after reported I/O failure |
 | Process lifecycle | Real POSIX PTY/Windows ConPTY fixture processes; controlling terminal on POSIX; duplicate resume reuse; no simultaneous headless reply and resumed terminal for one owned session; stop/cleanup |
 | Transport | Authentication, Host/Origin restrictions, malformed input, native-only bridge policy, bounded frame size, fragmentation with ping, input framing, reconnection/backlog replay |
 | Settings | Validation, persisted changes, disabled harness behavior |
