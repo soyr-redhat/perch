@@ -20,29 +20,44 @@ import platform
 import shutil
 import subprocess
 import time
+import threading
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-WORKING_AGE_S = 8          # writes within this window => actively working
-BUSY_HINT_GRACE_S = 120    # in-flight hint keeps "working" this long
-WAITING_AGE_S = 15 * 60    # beyond this, session drops from LIVE to QUIET
+WORKING_AGE_S = 8  # writes within this window => actively working
+BUSY_HINT_GRACE_S = 120  # in-flight hint keeps "working" this long
+WAITING_AGE_S = 15 * 60  # beyond this, session drops from LIVE to QUIET
 
 
 # --------------------------------------------------------------------------
 # model
 
+
 @dataclass
 class TailEvent:
-    who: str   # user | assistant | tool
+    who: str  # user | assistant | tool
     text: str
     ts: Optional[str] = None
+
+
+class PromptBuffer(deque):
+    def __init__(self):
+        super().__init__(maxlen=150)
+        self.count = 0
+        self.offset = 0
+
+    def append(self, item):
+        super().append({**item, "index": self.count, "offset": self.offset})
+        self.count += 1
 
 
 @dataclass
 class FileState:
     """Incremental parse state for one session file."""
+
     path: str
     offset: int = 0
     session_id: Optional[str] = None
@@ -52,25 +67,57 @@ class FileState:
     model: Optional[str] = None
     tokens: Optional[int] = None
     last_ts: Optional[str] = None
-    hint: str = "unknown"          # busy | done | unknown
-    tail: deque = field(default_factory=lambda: deque(maxlen=15))
-    prompts: deque = field(default_factory=lambda: deque(maxlen=150))
+    hint: str = "unknown"  # busy | done | unknown
+    tail: deque = field(default_factory=lambda: deque(maxlen=60))
+    prompts: PromptBuffer = field(default_factory=PromptBuffer)
+    mtime: float = -1
+    size: int = -1
+    identity: tuple = ()
+    errors: int = 0
+    harness: str = ""
 
 
-def read_history(adapter: "Adapter", path: str, pidx: int, span: int = 40) -> dict:
-    """Extract the slice of a session starting at its pidx-th user prompt."""
+def read_history(
+    adapter: "Adapter",
+    path: str,
+    pidx: int,
+    span: int = 100,
+    offset: int | None = None,
+    total: int | None = None,
+) -> dict:
+    """Stream one prompt's events with bounded memory; use a known byte offset when available."""
     st = FileState(path=path)
-    st.tail = deque()  # unbounded: walk the whole file
-    for rec, _ in _iter_json_lines(path, 0):
-        adapter.consume(rec, st)
-    events = [vars(e) for e in st.tail]
-    starts = [i for i, e in enumerate(events) if e["who"] == "user"]
-    if not starts:
-        return {"events": events[-span:], "prompt": -1, "of": 0}
-    pidx = max(0, min(pidx, len(starts) - 1))
-    start = starts[pidx]
-    end = starts[pidx + 1] if pidx + 1 < len(starts) else len(events)
-    return {"events": events[start:end][:span], "prompt": pidx, "of": len(starts)}
+    st.tail = deque(maxlen=span + 1)
+    prompt = pidx - 1 if offset is not None else -1
+    selected = []
+    if adapter.format == "json":
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        records = dig(doc, adapter.records_path) if adapter.records_path else doc
+        iterator = ((rec, 0) for rec in records if isinstance(rec, dict))
+    else:
+        iterator = _iter_json_lines(path, offset or 0)
+    for rec, _ in iterator:
+        st.tail.clear()
+        try:
+            adapter.consume(rec, st)
+        except (ValueError, TypeError, AttributeError, KeyError):
+            continue
+        for event in st.tail:
+            if event.who == "user":
+                prompt += 1
+                if prompt > pidx:
+                    return {
+                        "events": selected,
+                        "prompt": pidx,
+                        "of": total or prompt + 1,
+                        "truncated": len(selected) >= span,
+                    }
+            if prompt == pidx and len(selected) < span:
+                selected.append(vars(event))
+        if len(selected) >= span:
+            break
+    return {"events": selected, "prompt": pidx, "of": total or prompt + 1, "truncated": len(selected) >= span}
 
 
 @dataclass
@@ -85,7 +132,7 @@ class Agent:
     mtime: float
     model: Optional[str]
     tokens: Optional[int]
-    state: str           # working | waiting | quiet
+    state: str  # working | waiting | quiet
     tail: list
     prompts: list = field(default_factory=list)
 
@@ -93,22 +140,29 @@ class Agent:
 # --------------------------------------------------------------------------
 # helpers
 
+
 def _iter_json_lines(path: str, offset: int) -> Iterable[tuple[dict, int]]:
-    """Yield (record, end_offset) for each complete JSON line after offset."""
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    """Consume complete lines only. Malformed records advance rather than poisoning the scan."""
+    with open(path, "rb") as fh:
         fh.seek(offset)
         while True:
-            line = fh.readline()
+            line = fh.readline(4 * 1024 * 1024)
             if not line:
                 break
-            end = fh.tell()
-            line = line.strip()
-            if not line:
+            if not line.endswith(b"\n"):
+                if len(line) < 4 * 1024 * 1024:
+                    break  # an unfinished append must be retried
+                while line and not line.endswith(b"\n"):
+                    line = fh.readline(4 * 1024 * 1024)
+                yield {"_perch_error": "Record exceeds 4 MB"}, fh.tell()
                 continue
             try:
-                yield json.loads(line), end
-            except json.JSONDecodeError:
-                continue
+                rec = json.loads(line)
+                if not isinstance(rec, dict):
+                    raise ValueError("Expected an object")
+            except (ValueError, UnicodeDecodeError):
+                rec = {"_perch_error": "Invalid JSON record"}
+            yield rec, fh.tell()
 
 
 def _max_ts(a: Optional[str], b: Optional[str]) -> Optional[str]:
@@ -117,31 +171,29 @@ def _max_ts(a: Optional[str], b: Optional[str]) -> Optional[str]:
     return a or b
 
 
-def _first_text(content: Any) -> Optional[str]:
-    """Pull the first meaningful text out of a message content field."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") in ("text", "input_text", "output_text"):
-                t = block.get("text")
-                if t:
-                    return t
-    return None
+def _first_text(content: Any, user=False) -> Optional[str]:
+    """Collect one message's text blocks without splitting it into extra prompts."""
+    blocks = [content] if isinstance(content, str) else [
+        b.get("text") for b in content
+        if isinstance(b, dict) and b.get("type") in ("text", "input_text", "output_text")
+    ] if isinstance(content, list) else []
+    texts = [_clean_user_text(t) if user else t for t in blocks if isinstance(t, str)]
+    return "\n\n".join(t for t in texts if t) or None
 
 
 def _clean_user_text(text: Optional[str]) -> Optional[str]:
     """Drop environment/context scaffolding that looks like a user message."""
-    if not text:
+    if not isinstance(text, str) or not text:
         return None
-    stripped = text.lstrip()
-    if stripped.startswith("<"):
-        return None
-    return text
+    # Strip only recognized harness scaffolding, preserving HTML/XML requests and
+    # actual user text following a context block in the same message.
+    tags = "environment_context|permissions instructions|collaboration_mode|in-app-browser-context"
+    cleaned = re.sub(rf"<({tags})(?:\s[^>]*)?>.*?</\1>", "", text, flags=re.DOTALL)
+    return cleaned.strip() or None
 
 
-def _truncate(text: str, limit: int = 400) -> str:
-    text = " ".join(text.split())
+def _truncate(text: str, limit: int = 8000) -> str:
+    text = " ".join(text.split()) if limit < 100 else text.strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
@@ -158,7 +210,7 @@ def dig(obj: Any, path: str) -> Any:
             seq = cur.get(key) if isinstance(cur, dict) else None
             if not isinstance(seq, list):
                 return None
-            rest = ".".join(path.split(".")[path.split(".").index(part) + 1:])
+            rest = ".".join(path.split(".")[path.split(".").index(part) + 1 :])
             for item in seq:
                 val = dig(item, rest) if rest else item
                 if val:
@@ -170,6 +222,7 @@ def dig(obj: Any, path: str) -> Any:
 
 # --------------------------------------------------------------------------
 # adapters
+
 
 def _which(name: str, *fallbacks: str) -> Optional[list[str]]:
     """Resolve an executable to an argv prefix; .cmd/.bat need cmd.exe to spawn."""
@@ -183,7 +236,17 @@ def _which(name: str, *fallbacks: str) -> Optional[list[str]]:
     if not path:
         return None
     if platform.system() == "Windows" and path.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", path]
+        # npm shims are shell scripts. Resolve their JS entry point so prompts and
+        # session IDs never pass through cmd.exe expansion.
+        wrapper = Path(path)
+        text = wrapper.read_text(encoding="utf-8", errors="replace")
+        match = re.search(r'%dp0%[\\/]([^"\r\n]+\.(?:m?js))', text, re.IGNORECASE)
+        node = shutil.which("node")
+        if match and node:
+            entry = wrapper.parent / match.group(1).replace("\\", os.sep)
+            if entry.is_file():
+                return [node, str(entry.resolve())]
+        return None
     return [path]
 
 
@@ -194,12 +257,12 @@ class Adapter:
     patterns: list[str] = []
     format = "jsonl"
     enabled = True
-    cmd: Optional[list[str]] = None      # argv prefix to launch the harness CLI
-    resume: Optional[list[str]] = None   # appended to cmd; "{session}" substituted
+    cmd: Optional[list[str]] = None  # argv prefix to launch the harness CLI
+    resume: Optional[list[str]] = None  # appended to cmd; "{session}" substituted
     message: Optional[list[str]] = None  # headless one-shot; "{session}"/"{text}" substituted
 
     def spawn_argv(self, session: Optional[str] = None) -> Optional[list[str]]:
-        if not self.cmd:
+        if not self.cmd or (session and session.startswith("-")):
             return None
         if session and self.resume:
             return self.cmd + [p.replace("{session}", session) for p in self.resume]
@@ -207,11 +270,9 @@ class Adapter:
 
     def message_argv(self, session: str, text: str) -> Optional[list[str]]:
         """Argv to deliver one message into an existing session, non-interactively."""
-        if not self.cmd or not self.message:
+        if not self.cmd or not self.message or not session or session.startswith("-"):
             return None
-        return self.cmd + [
-            p.replace("{session}", session).replace("{text}", text) for p in self.message
-        ]
+        return self.cmd + [p.replace("{session}", session).replace("{text}", text) for p in self.message]
 
     def session_files(self) -> Iterable[str]:
         seen = set()
@@ -237,7 +298,7 @@ class OmpAdapter(Adapter):
     def __init__(self):
         self.cmd = _which("omp", "~/AppData/Local/omp/omp.exe")
         self.resume = ["--resume", "{session}"]
-        self.message = ["--print", "--resume", "{session}", "{text}"]
+        self.message = ["--print", "--resume", "{session}", "--", "{text}"]
 
     def consume(self, rec: dict, st: FileState) -> None:
         rtype = rec.get("type")
@@ -256,7 +317,7 @@ class OmpAdapter(Adapter):
             role = msg.get("role")
             blocks = msg.get("content") or []
             if role == "user":
-                text = _clean_user_text(_first_text(blocks))
+                text = _first_text(blocks, user=True)
                 if text:
                     st.tail.append(TailEvent("user", _truncate(text), ts))
                     st.prompts.append({"text": _truncate(text, 70), "ts": ts})
@@ -289,7 +350,7 @@ class ClaudeAdapter(Adapter):
     def __init__(self):
         self.cmd = _which("claude", "~/AppData/Roaming/npm/claude.cmd", "~/.local/bin/claude")
         self.resume = ["--resume", "{session}"]
-        self.message = ["-p", "--resume", "{session}", "{text}"]
+        self.message = ["-p", "--resume", "{session}", "--", "{text}"]
 
     def consume(self, rec: dict, st: FileState) -> None:
         rtype = rec.get("type")
@@ -309,24 +370,13 @@ class ClaudeAdapter(Adapter):
         content = msg.get("content")
 
         if rtype == "user":
-            if isinstance(content, str):
-                text = _clean_user_text(content)
-                if text:
-                    st.tail.append(TailEvent("user", _truncate(text), ts))
-                    st.prompts.append({"text": _truncate(text, 70), "ts": ts})
-                    if not st.title:
-                        st.title = _truncate(text, 70)
+            text = _first_text(content, user=True)
+            if text:
+                st.tail.append(TailEvent("user", _truncate(text), ts))
+                st.prompts.append({"text": _truncate(text, 70), "ts": ts})
+                if not st.title:
+                    st.title = _truncate(text, 70)
                 st.hint = "busy"
-            elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = _clean_user_text(block.get("text"))
-                        if text:
-                            st.tail.append(TailEvent("user", _truncate(text), ts))
-                            st.prompts.append({"text": _truncate(text, 70), "ts": ts})
-                            if not st.title:
-                                st.title = _truncate(text, 70)
-                        st.hint = "busy"
         elif rtype == "assistant":
             if msg.get("model"):
                 st.model = msg["model"]
@@ -355,8 +405,11 @@ class CodexAdapter(Adapter):
 
     def __init__(self):
         self.cmd = _which("codex", "~/AppData/Local/Programs/OpenAI/Codex/bin/codex.exe")
+        self.patterns = [
+            str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions/**/*.jsonl")
+        ]
         self.resume = ["resume", "{session}"]
-        self.message = ["exec", "resume", "{session}", "{text}"]
+        self.message = ["exec", "resume", "{session}", "--", "{text}"]
 
     def consume(self, rec: dict, st: FileState) -> None:
         rtype = rec.get("type")
@@ -376,7 +429,7 @@ class CodexAdapter(Adapter):
             if ptype == "message":
                 role = payload.get("role")
                 if role in ("user", "assistant"):
-                    text = _clean_user_text(_first_text(payload.get("content")))
+                    text = _first_text(payload.get("content"), user=role == "user")
                     if text:
                         st.tail.append(TailEvent(role, _truncate(text), ts))
                         if role == "user":
@@ -414,6 +467,18 @@ class DeclarativeAdapter(Adapter):
     """
 
     def __init__(self, cfg: dict):
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("id"), str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", cfg["id"]):
+            raise ValueError("Source needs a valid id")
+        for key in ("patterns", "cmd", "resume", "message"):
+            value = cfg.get(key)
+            if value is not None and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
+                raise ValueError(f"{key} must be a list of strings")
+        if cfg.get("format", "jsonl") not in ("json", "jsonl"):
+            raise ValueError("Source format must be json or jsonl")
+        if not isinstance(cfg.get("map", {}), dict) or not all(isinstance(v, str) for v in cfg.get("map", {}).values()):
+            raise ValueError("Source map must contain paths")
+        if not isinstance(cfg.get("roles", {}), dict):
+            raise ValueError("Source roles must be an object")
         self.id = cfg["id"]
         self.name = cfg.get("name", self.id)
         self.color = cfg.get("color", "#0a84ff")
@@ -437,11 +502,13 @@ class DeclarativeAdapter(Adapter):
         m = self.map
         ts = dig(rec, m.get("ts", ""))
         st.last_ts = _max_ts(st.last_ts, ts if isinstance(ts, str) else None)
-        st.session_id = st.session_id or dig(rec, m.get("id", ""))
-        st.cwd = st.cwd or dig(rec, m.get("cwd", ""))
+        identifier = dig(rec, m["id"]) if m.get("id") else None
+        cwd = dig(rec, m["cwd"]) if m.get("cwd") else None
+        st.session_id = st.session_id or (identifier if isinstance(identifier, str) else None)
+        st.cwd = st.cwd or (cwd if isinstance(cwd, str) else None)
         st.started = st.started or (ts if isinstance(ts, str) else None)
-        model = dig(rec, m.get("model", ""))
-        if model:
+        model = dig(rec, m["model"]) if m.get("model") else None
+        if isinstance(model, str) and model:
             st.model = model
         role = self._role_of(dig(rec, m.get("role", "")))
         text = dig(rec, m.get("text", ""))
@@ -450,7 +517,9 @@ class DeclarativeAdapter(Adapter):
             if text:
                 st.tail.append(TailEvent(role, _truncate(text), ts if isinstance(ts, str) else None))
                 if role == "user":
-                    st.prompts.append({"text": _truncate(text, 70), "ts": ts if isinstance(ts, str) else None})
+                    st.prompts.append(
+                        {"text": _truncate(text, 70), "ts": ts if isinstance(ts, str) else None}
+                    )
                 if role == "user" and not st.title:
                     st.title = _truncate(text, 70)
                 st.hint = "busy" if role == "user" else "done"
@@ -462,11 +531,13 @@ def load_declarative(config_path: str) -> list[DeclarativeAdapter]:
             cfg = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return []
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("sources", []), list):
+        return []
     adapters = []
     for entry in cfg.get("sources", []):
         try:
             adapters.append(DeclarativeAdapter(entry))
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ValueError):
             continue
     return adapters
 
@@ -486,10 +557,17 @@ def scan_processes() -> dict[str, int]:
                 "($_.Name -eq 'node.exe' -and $_.CommandLine -match 'claude') } | "
                 "Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
             )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script],
-                capture_output=True, text=True, timeout=15,
-            ).stdout.strip()
+            from term import external_process_env
+
+            with external_process_env() as env:
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    creationflags=0x08000000,
+                    env=env,
+                ).stdout.strip()
             if not out:
                 return {}
             data = json.loads(out)
@@ -502,7 +580,10 @@ def scan_processes() -> dict[str, int]:
                     counts[harness] = counts.get(harness, 0) + 1
             return counts
         out = subprocess.run(
-            ["ps", "-eo", "comm=,args="], capture_output=True, text=True, timeout=10,
+            ["ps", "-eo", "comm=,args="],
+            capture_output=True,
+            text=True,
+            timeout=10,
         ).stdout
         counts = {}
         for line in out.splitlines():
@@ -523,6 +604,7 @@ def scan_processes() -> dict[str, int]:
 # --------------------------------------------------------------------------
 # scanner
 
+
 class Scanner:
     def __init__(self, quiet_days: float = 7.0, config_dir: Optional[str] = None):
         self.adapters: list[Adapter] = [OmpAdapter(), ClaudeAdapter(), CodexAdapter()]
@@ -533,44 +615,138 @@ class Scanner:
         self._states: dict[str, FileState] = {}
         self._procs: dict[str, int] = {}
         self._procs_at = 0.0
+        self._paths = {}
+        self._discovered_at = 0.0
+        self.changed = threading.Event()
+        self._lock = threading.RLock()
+        self._observer = None
 
     def apply_settings(self, cfg: dict) -> None:
         self.quiet_s = cfg.get("watching", {}).get("quietDays", 7) * 86400
+        self.changed.set()
         disabled = set(cfg.get("harnesses", {}).get("disabled", []))
         for adapter in self.adapters:
             adapter.enabled = adapter.id not in disabled
 
+    def start_watching(self):
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+        from watchdog.observers.polling import PollingObserver
+
+        scanner = self
+
+        class Events(FileSystemEventHandler):
+            def on_any_event(self, event):
+                if event.event_type in ("opened", "closed_no_write", "closed"):
+                    return
+                scanner.changed.set()
+
+        # FSEvents can abort the interpreter in restricted macOS app contexts.
+        # Polling watches metadata only; transcript parsing remains incremental.
+        observer = PollingObserver(timeout=2) if platform.system() == "Darwin" else Observer()
+        roots = set()
+        for adapter in self.adapters:
+            for pattern in adapter.patterns:
+                prefix = os.path.expanduser(pattern).split("*")[0]
+                root = Path(prefix)
+                if not root.is_dir():
+                    root = root.parent
+                if root.is_dir():
+                    roots.add(str(root))
+        for root in roots:
+            observer.schedule(Events(), root, recursive=True)
+        try:
+            observer.start()
+        except (OSError, RuntimeError):
+            observer.stop()
+            if observer.is_alive():
+                observer.join(timeout=3)
+            observer = PollingObserver(timeout=2)
+            for root in roots:
+                observer.schedule(Events(), root, recursive=True)
+            observer.start()
+        self._observer = observer
+
+    def close(self):
+        if self._observer:
+            self._observer.stop()
+            self._observer.join(timeout=3)
+
     def _parse_file(self, adapter: Adapter, path: str, mtime: float, size: int) -> FileState:
         st = self._states.get(path)
-        if st is None or size < st.offset:  # new or truncated file
+        if st and st.mtime == mtime and st.size == size:
+            return st
+        if (
+            st is None
+            or size < st.offset
+            or (size == st.size and st.mtime != mtime)
+            or adapter.format == "json"
+        ):
             st = FileState(path=path)
             self._states[path] = st
         if adapter.format == "json":
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            with open(path, "r", encoding="utf-8") as fh:
                 doc = json.load(fh)
             records = dig(doc, adapter.records_path) if adapter.records_path else doc
-            for rec in records if isinstance(records, list) else []:
-                if isinstance(rec, dict):
-                    adapter.consume(rec, st)
-            st.offset = size
+            if not isinstance(records, list):
+                raise ValueError("Session records must be a list")
+            iterator = ((rec, size) for rec in records)
         else:
-            for rec, end in _iter_json_lines(path, st.offset):
+            iterator = _iter_json_lines(path, st.offset)
+        for rec, end in iterator:
+            st.prompts.offset = st.offset
+            try:
+                if not isinstance(rec, dict) or "_perch_error" in rec:
+                    raise ValueError("Invalid record")
                 adapter.consume(rec, st)
-                st.offset = end
+            except (ValueError, TypeError, AttributeError, KeyError):
+                st.errors += 1
+            st.offset = end
+        st.harness = adapter.id
+        st.mtime, st.size = mtime, size
         return st
 
+    def history(self, agent_id, pidx):
+        with self._lock:
+            for adapter in self.adapters:
+                for path, st in self._states.items():
+                    if st.harness != adapter.id:
+                        continue
+                    if f"{adapter.id}:{st.session_id or adapter.fallback_id(path)}" != agent_id:
+                        continue
+                    if not 0 <= pidx < st.prompts.count:
+                        raise ValueError("Prompt index is outside this session")
+                    prompt = next((p for p in st.prompts if p["index"] == pidx), None)
+                    return read_history(
+                        adapter,
+                        path,
+                        pidx,
+                        offset=prompt["offset"] if prompt and adapter.format != "json" else None,
+                        total=st.prompts.count,
+                    )
+        raise ValueError("Session is no longer available")
+
     def scan(self) -> dict:
+        with self._lock:
+            return self._scan()
+
+    def _scan(self) -> dict:
         now = time.time()
         if now - self._procs_at > 10:
             self._procs = scan_processes()
             self._procs_at = now
 
         agents: list[Agent] = []
-        adapter_by_id = {a.id: a for a in self.adapters}
+        errors = []
+        retained = set()
+        if self.changed.is_set() or now - self._discovered_at > 30:
+            self.changed.clear()
+            self._paths = {a.id: list(a.session_files()) for a in self.adapters if a.enabled}
+            self._discovered_at = now
         for adapter in self.adapters:
             if not adapter.enabled:
                 continue
-            for path in adapter.session_files():
+            for path in self._paths.get(adapter.id, []):
                 try:
                     stat = os.stat(path)
                 except OSError:
@@ -578,9 +754,30 @@ class Scanner:
                 age = now - stat.st_mtime
                 if age > self.quiet_s:
                     continue
+                retained.add(path)
+                previous = self._states.get(path)
+                identity = (stat.st_dev, stat.st_ino)
+                if previous and previous.identity and previous.identity != identity:
+                    self._states.pop(path)
                 try:
                     st = self._parse_file(adapter, path, stat.st_mtime, stat.st_size)
-                except (OSError, json.JSONDecodeError):
+                    st.identity = identity
+                    if st.errors:
+                        errors.append(
+                            {
+                                "harness": adapter.id,
+                                "file": Path(path).name,
+                                "message": f"Skipped {st.errors} malformed records",
+                            }
+                        )
+                except (OSError, ValueError, TypeError, AttributeError) as exc:
+                    errors.append(
+                        {
+                            "harness": adapter.id,
+                            "file": Path(path).name,
+                            "message": f"Cannot read session: {type(exc).__name__}",
+                        }
+                    )
                     continue
 
                 if age < WORKING_AGE_S or (st.hint == "busy" and age < BUSY_HINT_GRACE_S):
@@ -591,35 +788,38 @@ class Scanner:
                     state = "quiet"
 
                 session_id = st.session_id or adapter.fallback_id(path)
-                agents.append(Agent(
-                    id=f"{adapter.id}:{session_id}",
-                    harness=adapter.id,
-                    title=st.title or f"Session {session_id[:8]}",
-                    cwd=st.cwd,
-                    file=path,
-                    started=st.started,
-                    updated=st.last_ts,
-                    mtime=stat.st_mtime,
-                    model=st.model,
-                    tokens=st.tokens,
-                    state=state,
-                    tail=[vars(e) for e in st.tail],
-                    prompts=list(st.prompts),
-                ))
+                agents.append(
+                    Agent(
+                        id=f"{adapter.id}:{session_id}",
+                        harness=adapter.id,
+                        title=st.title or f"Session {session_id[:8]}",
+                        cwd=st.cwd,
+                        file=path,
+                        started=st.started,
+                        updated=st.last_ts,
+                        mtime=stat.st_mtime,
+                        model=st.model,
+                        tokens=st.tokens,
+                        state=state,
+                        tail=[vars(e) for e in st.tail],
+                        prompts=list(st.prompts),
+                    )
+                )
 
+        self._states = {p: st for p, st in self._states.items() if p in retained}
         state_rank = {"working": 0, "waiting": 1, "quiet": 2}
         agents.sort(key=lambda a: (state_rank[a.state], -a.mtime))
 
         return {
-            "generated": now,
+            "errors": errors,
             "harnesses": [
                 {
                     "id": a.id,
                     "name": a.name,
                     "color": a.color,
-                    "canSpawn": bool(a.cmd),
-                    "canResume": bool(a.cmd and a.resume),
-                    "canMessage": bool(a.cmd and a.message),
+                    "canSpawn": bool(a.enabled and a.cmd),
+                    "canResume": bool(a.enabled and a.cmd and a.resume),
+                    "canMessage": bool(a.enabled and a.cmd and a.message),
                 }
                 for a in self.adapters
             ],
