@@ -153,12 +153,12 @@ function paintPromptNavigation() {
   for(const mark of $('#history-marks').children){
     const distance=((Number(mark.dataset.index)+.5)/total-(preview.pointerPosition??position))*height;
     const proximity=open?Math.exp(-.5*(distance/24)**2):0;
-    mark.style.width=`${10+38*proximity}px`;
+    mark.style.width=`${10+5*proximity}px`;
     mark.style.opacity=String(.4+.35*proximity);
     mark.style.visibility=Number(mark.dataset.index)===index?'hidden':'';
   }
   $('#history-current').style.top=`${position*100}%`;
-  $('#history-current').style.width=open?'52px':'14px';
+  $('#history-current').style.width=open?'21px':'14px';
   const text=a.prompts.find(p=>p.index===index)?.text||`Prompt ${index+1}`;
   const option=$('#history-option');option.textContent=text;
   option.setAttribute('aria-posinset',String(index+1));option.setAttribute('aria-setsize',String(total));
