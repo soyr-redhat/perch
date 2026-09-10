@@ -214,6 +214,14 @@ class SharingTests(unittest.TestCase):
 
 
 class ServerTests(unittest.TestCase):
+    def test_pending_message_clears_only_after_a_new_transcript_entry(self):
+        pending = server.Pending()
+        original = {"who": "user", "text": "same words", "ts": "2026-09-09T00:00:00Z"}
+        pending.add("claude:session", "same words", [original])
+        self.assertIn("claude:session", pending.snapshot([{"id": "claude:session", "tail": [original]}]))
+        landed = {"who": "user", "text": "same words", "ts": "2026-09-09T00:00:01Z"}
+        self.assertNotIn("claude:session", pending.snapshot([{"id": "claude:session", "tail": [original, landed]}]))
+
     def setUp(self):
         self.server = server.serve(DemoScanner(), TermRegistry(), 0, demo=True)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)

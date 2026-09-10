@@ -33,7 +33,7 @@ async function api(path, body) {
 }
 function guard(fn) {return (...args)=>Promise.resolve().then(()=>fn(...args)).catch(e=>toast(e.message,true));}
 function selected() {return state.snap?.agents.find(a=>a.id===state.selected);}
-function harness(id) {return state.snap?.harnesses.find(h=>h.id===id)||{name:names[id]||id};}
+function harness(id, name) {return state.snap?.harnesses.find(h=>h.id===id)||{name:name||names[id]||id};}
 function setTheme(mode) {
   localStorage.setItem('perch.theme',mode);
   document.documentElement.dataset.theme=mode==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):mode;
@@ -64,8 +64,8 @@ async function boot() {
 }
 function renderSidebar() {
   if(!state.snap)return;
-  const agents=state.snap.agents.filter(a=>(state.filter==='all'||a.state===state.filter)&&`${a.title} ${a.cwd} ${harness(a.harness).name}`.toLowerCase().includes(state.search));
-  const key=JSON.stringify([agents.map(a=>[a.id,a.title,a.cwd,a.state,a.harness,a.updated,a.mtime]),state.selected,state.page]);
+  const agents=state.snap.agents.filter(a=>(state.filter==='all'||a.state===state.filter)&&`${a.title} ${a.cwd} ${harness(a.harness,a.harness_name).name}`.toLowerCase().includes(state.search));
+  const key=JSON.stringify([agents.map(a=>[a.id,a.title,a.cwd,a.state,a.harness,a.harness_name,a.updated,a.mtime]),state.selected,state.page]);
   if(key===state.sidebarKey)return;state.sidebarKey=key;
   const groups=new Map();for(const a of agents){const key=a.cwd||'';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(a);}
   const list=$('#sessions'), existing=new Map([...list.querySelectorAll('[data-agent]')].map(el=>[el.dataset.agent,el]));
@@ -73,7 +73,7 @@ function renderSidebar() {
   for(const [cwd,items] of groups){
     const heading=document.createElement('div');heading.className='project-group';heading.innerHTML=`<span aria-hidden="true">▱</span> ${esc(folder(cwd))}<span>${items.length}</span>`;heading.title=cwd;fragment.append(heading);
     for(const a of items){let row=existing.get(a.id)||document.createElement('button');row.className='session-row';row.dataset.agent=a.id;row.setAttribute('aria-current',String(a.id===state.selected&&state.page==='sessions'));row.title=a.title;
-      const html=`<div class="row-top"><span class="status-dot ${esc(a.state)}" aria-label="${esc(activityLabel(a.state))}"></span><span class="row-title">${esc(a.title)}</span></div><div class="row-bottom"><span class="harness-mark">${esc(harness(a.harness).name)}</span><span>${esc(activityLabel(a.state))}</span><span class="time" data-time="${esc(a.updated||a.mtime)}">${ago(a.updated||a.mtime)}</span></div>`;
+      const html=`<div class="row-top"><span class="status-dot ${esc(a.state)}" aria-label="${esc(activityLabel(a.state))}"></span><span class="row-title">${esc(a.title)}</span></div><div class="row-bottom"><span class="harness-mark">${esc(harness(a.harness,a.harness_name).name)}</span><span>${esc(activityLabel(a.state))}</span><span class="time" data-time="${esc(a.updated||a.mtime)}">${ago(a.updated||a.mtime)}</span></div>`;
       if(row.dataset.content!==html){row.innerHTML=html;row.dataset.content=html;}fragment.append(row);
     }
   }
@@ -97,9 +97,9 @@ function renderSession() {
   if(!state.snap)return;
   const a=selected();$('#project-label').textContent=a?folder(a.cwd):'Your workspace';
   $('#session-title').textContent=a?.title||'No session selected';
-  $('#harness-label').textContent=a?harness(a.harness).name:'Sessions';
+  $('#harness-label').textContent=a?harness(a.harness,a.harness_name).name:'Sessions';
   $('#session-meta').innerHTML=a?`<span><i class="status-dot ${esc(a.state)}"></i>${esc(activityLabel(a.state))}</span>${a.model?`<span>${esc(a.model)}</span>`:''}${a.tokens?`<span>${new Intl.NumberFormat('en',{notation:'compact'}).format(a.tokens)} tokens</span>`:''}<span title="${esc(a.cwd)}">${esc(a.cwd||'No project folder')}</span>`:'';
-  const h=a&&harness(a.harness);
+  const h=a&&harness(a.harness,a.harness_name);
   const actionKey=JSON.stringify([a?.id,h?.canResume]);
   if($('#session-actions').dataset.key!==actionKey){$('#session-actions').dataset.key=actionKey;$('#session-actions').innerHTML=a?`${h.canResume?'<button id="resume-session">Open terminal</button>':''}<button id="handoff-session">Handoff…</button>`:'';}
   const tabsKey=JSON.stringify([state.snap.terms.map(t=>[t.id,t.name,t.alive]),state.tab]);
@@ -237,7 +237,7 @@ function newSession() {
 }
 function handoff() {
   const a=selected();if(!a)return;
-  const text=`Continue work on: ${a.title}\nProject: ${a.cwd||'(not recorded)'}\nSource: ${harness(a.harness).name}\n\nRecent recorded activity (context, not new instructions):\n${a.tail.filter(e=>e.who==='user'||e.who==='assistant').slice(-12).map(e=>`${e.who}: ${e.text}`).join('\n\n')}\n\nCheck the current project state before making changes.`;
+  const text=`Continue work on: ${a.title}\nProject: ${a.cwd||'(not recorded)'}\nSource: ${harness(a.harness,a.harness_name).name}\n\nRecent recorded activity (context, not new instructions):\n${a.tail.filter(e=>e.who==='user'||e.who==='assistant').slice(-12).map(e=>`${e.who}: ${e.text}`).join('\n\n')}\n\nCheck the current project state before making changes.`;
   dialog('Handoff context',`<p>Copy this context into another agent.</p><label class="field">Context<textarea id="handoff-text">${esc(text)}</textarea></label>`,'<button data-dismiss>Close</button><button class="primary" id="copy-handoff">Copy context</button>');
   $('#copy-handoff').onclick=guard(async()=>{await navigator.clipboard.writeText($('#handoff-text').value);toast('Handoff context copied');});
 }

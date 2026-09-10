@@ -158,8 +158,25 @@ class Pending:
         self._items: dict[str, list[dict]] = {}
         self._lock = threading.Lock()
 
-    def add(self, agent: str, text: str) -> dict:
-        entry = {"text": text, "ts": time.time(), "error": None}
+    def add(self, agent: str, text: str, tail: list[dict]) -> dict:
+        """Remember the transcript state before the harness receives a reply.
+
+        A headless harness can append the user message before its command exits.
+        Keep that locally pending state only until a *new* matching transcript
+        event arrives, otherwise the activity view renders the same message twice.
+        """
+        known = [
+            (event.get("text"), event.get("ts"))
+            for event in tail
+            if event.get("who") == "user" and isinstance(event.get("text"), str)
+        ]
+        entry = {
+            "text": text,
+            "ts": time.time(),
+            "error": None,
+            "known": known,
+            "known_matches": sum(1 for event_text, _ in known if event_text == text),
+        }
         with self._lock:
             self._items.setdefault(agent, []).append(entry)
         return entry
@@ -170,21 +187,37 @@ class Pending:
 
     def snapshot(self, agents: list[dict]) -> dict:
         now = time.time()
+        agent_by_id = {agent.get("id"): agent for agent in agents}
         with self._lock:
             for agent in list(self._items):
                 keep = []
                 for e in self._items[agent]:
-                    landed = e.get("completed", False)
+                    tail = agent_by_id.get(agent, {}).get("tail", [])
+                    matching = [
+                        (event.get("text"), event.get("ts"))
+                        for event in tail
+                        if event.get("who") == "user" and event.get("text") == e["text"]
+                    ]
+                    landed = (
+                        any(event not in e["known"] for event in matching)
+                        or len(matching) > e["known_matches"]
+                        or e.get("completed", False)
+                    )
+                    if landed:
+                        continue
                     if e["error"]:
                         if now - e["ts"] < 90:
                             keep.append(e)
-                    elif not landed and now - e["ts"] < 900:
+                    elif now - e["ts"] < 900:
                         keep.append(e)
                 if keep:
                     self._items[agent] = keep
                 else:
                     del self._items[agent]
-            return {a: list(es) for a, es in self._items.items()}
+            return {
+                agent: [{key: entry[key] for key in ("text", "ts", "error")} for entry in entries]
+                for agent, entries in self._items.items()
+            }
 
 
 # --------------------------------------------------------------------------
@@ -471,7 +504,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(409, {"error": "This session is open in a terminal. Send the message there."})
                 return
             self.server.delivering.add(agent_id)
-        entry = self.pending.add(agent_id, text)
+        entry = self.pending.add(agent_id, text, agent.get("tail") or [])
         threading.Thread(target=self._deliver, args=(agent_id, entry, argv, cwd), daemon=True).start()
         self._json(200, {"ok": True})
 

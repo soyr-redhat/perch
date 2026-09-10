@@ -142,6 +142,22 @@ class RuntimeTests(unittest.TestCase):
         self.workspace.wait_for(lambda: not self.workspace.server.delivering)
         self.workspace.wait_for(lambda: any(e["text"] == "Fixture reply: __SLOW__" for a in self.request("/api/snapshot")[1]["agents"] for e in a["tail"]))
 
+    def test_recorded_reply_replaces_pending_message(self):
+        self.assertEqual(self.request("/api/message", {"agent": "fixture:session-two", "text": "deduplicate me"})[0], 200)
+        self.workspace.wait_for(
+            lambda: any(
+                event["who"] == "user" and event["text"] == "deduplicate me"
+                for agent in self.request("/api/snapshot")[1]["agents"]
+                if agent["id"] == "fixture:session-two"
+                for event in agent["tail"]
+            )
+        )
+        self.assertNotIn("fixture:session-two", self.request("/api/snapshot")[1]["pending"])
+
+    def test_agent_snapshot_carries_harness_name(self):
+        agents = self.request("/api/snapshot")[1]["agents"]
+        self.assertTrue(all(agent["harness_name"] == "Fixture CLI" for agent in agents))
+
     def test_failed_delivery_is_visible(self):
         self.request("/api/message", {"agent": "fixture:session-two", "text": "__FAIL__"})
         self.workspace.wait_for(lambda: not self.workspace.server.delivering)

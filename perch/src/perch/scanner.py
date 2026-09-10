@@ -135,6 +135,7 @@ class Agent:
     state: str  # working | waiting | quiet
     tail: list
     prompts: list = field(default_factory=list)
+    harness_name: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
@@ -803,6 +804,7 @@ class Scanner:
                         state=state,
                         tail=[vars(e) for e in st.tail],
                         prompts=list(st.prompts),
+                        harness_name=adapter.name,
                     )
                 )
 

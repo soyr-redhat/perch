@@ -37,6 +37,22 @@ PATH without installing Python. Running it without flags opens or activates Perc
 
 CLI and desktop sharing use the same settings and synchronization engine. `PERCH_DATA_DIR` overrides Perch's own storage (default `~/.perch`); it does not relocate the harnesses. Declarative session adapters belong in `~/.perch/sources.json`.
 
+## Install
+
+The desktop release includes the same `perch` and `perch-cli` command-line entry points as the application.
+
+```sh
+# Apple silicon macOS
+curl -fsSL https://raw.githubusercontent.com/soyr-redhat/perch/main/perch/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/soyr-redhat/perch/main/perch/install.ps1 | iex
+```
+
+Each installer downloads a GitHub Release asset, verifies its SHA-256 value from that release, then installs Perch for the current user. The macOS installer puts the application in `~/Applications/Perch.app` and links `perch` and `perch-cli` in `~/.local/bin`. The Windows installer uses `%LOCALAPPDATA%\Programs\Perch` and adds that directory to the user PATH. The first macOS launch may need a Gatekeeper confirmation until signed and notarized releases are available.
+
 ## Sharing behavior
 
 Use **Shared tools → Review sharing → Apply additions**. Choose receiving harnesses in Settings. Optional automatic sharing applies compatible additions every 30 seconds while Perch runs.
