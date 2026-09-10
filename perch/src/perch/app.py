@@ -26,6 +26,21 @@ def run_app(url, httpd):
     httpd.native_bridge = True
 
     class Bridge:
+        def installation(self, repair=False, cli=True):
+            from .desktop import installation
+            import subprocess
+
+            try:
+                if repair:
+                    if httpd.demo:
+                        raise ValueError("Demo mode is read-only")
+                    if type(cli) is not bool:
+                        raise ValueError("CLI preference must be a boolean")
+                    return installation.repair(cli=cli)
+                return installation.status()
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                return {"error": str(exc)}
+
         def open_cli(self, agent_id):
             from .desktop.lifecycle import open_cli_session
 
@@ -141,6 +156,8 @@ def parser():
     p.add_argument("--dry-run", action="store_true", help="Preview sharing without changing harness files")
     p.add_argument("--tools", action="store_true", help="Show shared tool inventory as JSON and exit")
     p.add_argument("--capabilities", action="store_true", help="List resources, plugin components, and compatibility as JSON")
+    p.add_argument("--resolve-skill", metavar="NAME", help="Review skill copies and choose a shared source")
+    p.add_argument("--skill-source", metavar="SOURCE_ID", help="Source ID from --resolve-skill")
     p.add_argument("--link", metavar="RESOURCE_ID", help="Review a resource connection; use --apply with --revision to apply")
     p.add_argument("--target", choices=settings.TARGETS, help="Destination for --link")
     p.add_argument("--apply", action="store_true", help="Apply the reviewed connection")
@@ -184,6 +201,16 @@ def main():
             return 1
         print(json.dumps(result, indent=2))
         return int(result.get("status") in ("failed", "uncertain"))
+    if args.resolve_skill:
+        from .skill_sharing import review
+
+        try:
+            result = review(args.resolve_skill, args.skill_source, args.revision, args.apply)
+        except (OSError, ValueError, TypeError) as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return int(bool(result["report"]["skills"]["errors"] or result["report"]["skills"]["conflicts"]))
     if args.capabilities or args.link:
         from . import capabilities
 

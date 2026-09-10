@@ -71,15 +71,6 @@ def _load_manifest():
     return doc
 
 
-def _record_links(created: list[dict]) -> None:
-    doc = _load_manifest()
-    existing = {entry.get("link"): entry for entry in doc["created"] if isinstance(entry, dict)}
-    for entry in created:
-        existing[entry["link"]] = entry
-    doc["created"] = list(existing.values())
-    write_json(MANIFEST, doc)
-
-
 def _shared_skill_root() -> Path:
     return Path(PERCH_DIR) / "shared" / "skills"
 
@@ -99,30 +90,6 @@ def _remove_managed_link(link: Path) -> None:
         link.rmdir()
 
 
-def _replace_managed_link(link: Path, target: Path) -> str:
-    previous = os.path.realpath(link)
-    _remove_managed_link(link)
-    try:
-        return _link_dir(str(target), str(link), resolve=False)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        _link_dir(previous, str(link))
-        raise
-
-
-def _points_to(link: Path, target: Path) -> bool:
-    if not link.is_symlink():
-        return False
-    raw = Path(os.readlink(link))
-    destination = raw if raw.is_absolute() else link.parent / raw
-    actual = os.path.normcase(os.path.abspath(destination))
-    expected = os.path.normcase(os.path.abspath(target))
-    if actual.startswith("\\\\?\\"):
-        actual = actual[4:]
-    if expected.startswith("\\\\?\\"):
-        expected = expected[4:]
-    return actual == expected
-
-
 def skill_inventory(roots=None) -> list:
     roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
     skills = {}
@@ -138,8 +105,16 @@ def skill_inventory(roots=None) -> list:
     return sorted(skills.values(), key=lambda x: x["name"].casefold())
 
 
-def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None, names=None) -> dict:
+def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None, names=None, sources=None) -> dict:
+    from . import skill_sharing
+
     roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
+    try:
+        _load_manifest()
+        if not dry_run:
+            skill_sharing.recover()
+    except (OSError, ValueError, KeyError) as exc:
+        return {"linked": [], "registered": [], "present": [], "consolidated": [], "backups": [], "conflicts": [], "errors": [{"source": "Perch", "reason": f"Cannot recover sharing state: {exc}"}], "total": 0}
     inventory = skill_inventory(roots)
     for name, source in (extra or {}).items():
         item = next((item for item in inventory if item["name"] == name), None)
@@ -149,78 +124,49 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None,
         item["origins"]["plugin"] = str(Path(source).resolve())
     if names is not None:
         inventory = [item for item in inventory if item["name"] in names]
-    report = {"linked": [], "registered": [], "present": [], "conflicts": [], "errors": [], "total": len(inventory)}
-    try:
-        manifest = _load_manifest()
-    except (OSError, ValueError) as exc:
-        report["errors"].append({"source": "Perch", "reason": f"Cannot read sync manifest: {type(exc).__name__}"})
-        return report
-    managed = _managed_links(manifest)
-    created = []
+    report = {"linked": [], "registered": [], "present": [], "consolidated": [], "backups": [], "conflicts": [], "errors": [], "total": len(inventory)}
     for skill in inventory:
-        origins = skill["origins"]
-        variants = set(origins.values())
-        if len(variants) > 1:
-            report["conflicts"].append(
-                {"skill": skill["name"], "reason": "Different source directories; choose one before sharing"}
-            )
-            continue
-        source = next(iter(variants))
-        registry = _shared_skill_root() / skill["name"]
-        if os.path.lexists(registry):
-            if os.path.realpath(registry) != source:
-                report["conflicts"].append(
-                    {"skill": skill["name"], "reason": "Perch registry already points to a different source"}
-                )
-                continue
-        else:
-            entry = {"skill": skill["name"], "kind": "registry"}
-            try:
-                if not dry_run:
-                    registry.parent.mkdir(parents=True, exist_ok=True)
-                    entry["kind"] = _link_dir(source, str(registry))
-                    created.append({"link": str(registry), "target": source, "kind": entry["kind"], "ts": time.time()})
-                report["registered"].append(entry)
-            except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                report["errors"].append({"skill": skill["name"], "source": "Perch", "reason": str(exc)})
-                continue
-        for target in targets:
-            if target not in roots:  # Claude Desktop does not have this skills-directory contract.
-                continue
-            dest = Path(roots[target]) / skill["name"]
-            if os.path.lexists(dest):
-                if os.path.realpath(dest) == source:
-                    if str(dest) in managed and not _points_to(dest, registry):
-                        try:
-                            if not dry_run:
-                                kind = _replace_managed_link(dest, registry)
-                                created.append({"link": str(dest), "target": str(registry), "kind": kind, "ts": time.time()})
-                            report["linked"].append({"skill": skill["name"], "into": target, "kind": "registry"})
-                        except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                            report["errors"].append({"skill": skill["name"], "into": target, "reason": str(exc)})
-                    elif os.path.join(os.path.realpath(dest.parent), dest.name) != source:
-                        report["present"].append({"skill": skill["name"], "into": target})
-                else:
-                    report["conflicts"].append(
-                        {"skill": skill["name"], "into": target, "reason": "Destination already exists"}
-                    )
-                continue
-            entry = {"skill": skill["name"], "into": target, "kind": "link"}
-            try:
-                if not dry_run:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    entry["kind"] = _link_dir(str(registry), str(dest), resolve=False)
-                    created.append(
-                        {"link": str(dest), "target": str(registry), "kind": entry["kind"], "ts": time.time()}
-                    )
-                report["linked"].append(entry)
-            except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                report["errors"].append({"skill": skill["name"], "into": target, "reason": str(exc)})
-    if created:
+        name, origins = skill["name"], skill["origins"]
+        registry = _shared_skill_root() / name
         try:
-            _record_links(created)
-        except (OSError, ValueError) as exc:
-            report["errors"].append({"source": "Perch", "reason": f"Links created but manifest could not be saved: {type(exc).__name__}"})
+            trees = skill_sharing.compare(origins)
+            source = skill_sharing.choose(origins, trees, registry, roots, (sources or {}).get(name))
+            if source is None:
+                report["conflicts"].append({"skill": name, "reason": "Skill contents differ; choose a shared source", "resolvable": True})
+                continue
+            if os.path.lexists(registry) and os.path.realpath(registry) != source:
+                if not skill_sharing.is_link(registry) or str(registry) not in _managed_links(_load_manifest()):
+                    report["conflicts"].append({"skill": name, "reason": "Perch registry contains an unmanaged source"})
+                    continue
+            operations, linked, present = [], [], []
+            registered = not os.path.lexists(registry)
+            if registered or os.path.realpath(registry) != source:
+                operations.append({"path": str(registry), "target": source})
+            for target in targets:
+                if target not in roots:
+                    continue
+                dest = Path(roots[target]) / name
+                if not skill_sharing.is_link(dest) and os.path.join(os.path.realpath(dest.parent), dest.name) == source:
+                    continue  # Never replace the authoritative physical source.
+                if skill_sharing.points_to(dest, registry):
+                    present.append({"skill": name, "into": target})
+                    continue
+                if os.path.lexists(dest) and os.path.realpath(dest) not in origins.values():
+                    raise ValueError(f"{target}: destination contains an unrecognized entry; left unchanged")
+                operations.append({"path": str(dest), "target": str(registry)})
+                linked.append({"skill": name, "into": target, "kind": "registry"})
+            if operations and not dry_run:
+                if skill_sharing.compare(origins) != trees:
+                    raise ValueError("Skill changed before sharing; review again")
+                report["backups"].extend(skill_sharing.apply(operations))
+            if registered:
+                report["registered"].append({"skill": name, "kind": "registry"})
+            if len(trees) > 1 and linked:
+                report["consolidated"].append({"skill": name, "source": source, "identical": len({json.dumps(t, sort_keys=True) for t in trees.values()}) == 1})
+            report["linked"].extend(linked)
+            report["present"].extend(present)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            report["errors"].append({"skill": name, "reason": str(exc)})
     return report
 
 
@@ -501,20 +447,28 @@ def fingerprint():
     for item in skill_inventory():
         digest.update(json.dumps(item, sort_keys=True).encode())
         for root in set(item["origins"].values()):
-            p = Path(root) / "SKILL.md"
-            digest.update(p.read_bytes())
+            from .skill_sharing import signature
+
+            try:
+                digest.update(signature(root).encode())
+            except (OSError, ValueError) as exc:
+                digest.update(str(exc).encode())
     return digest.hexdigest()
 
 
-def sync_all(skills=True, mcp=True, targets=SKILL_TARGETS, dry_run=False, revision=None):
+def sync_all(skills=True, mcp=True, targets=SKILL_TARGETS, dry_run=False, revision=None, *, skill_sources=None, skill_names=None):
     targets = tuple(t for t in targets if t in TARGET_NAMES)
     with sync_lock(PERCH_DIR):
+        if not dry_run:
+            from .skill_sharing import recover
+
+            recover()
         before = fingerprint()
-        plan_id = hashlib.sha256((before + json.dumps([skills, mcp, targets])).encode()).hexdigest()
+        plan_id = hashlib.sha256((before + json.dumps([skills, mcp, targets, skill_sources, sorted(skill_names) if skill_names else None])).encode()).hexdigest()
         if revision is not None and revision != plan_id:
             raise ValueError("Tools or sharing preferences changed. Preview again before applying.")
         report = {
-            "skills": sync_skills(targets=targets, dry_run=dry_run)
+            "skills": sync_skills(targets=targets, dry_run=dry_run, sources=skill_sources, names=skill_names)
             if skills
             else {"linked": [], "registered": [], "present": [], "conflicts": [], "errors": [], "total": 0},
             "mcp": sync_mcp(targets=targets, dry_run=dry_run)

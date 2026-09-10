@@ -81,3 +81,7 @@ Verified compact sizing, tapered mark widths, preview without navigation, click
 selection, keyboard preview/activation, first/middle/last history contents, return
 to live, session switching, and stable preview/focus through 20 snapshots at 10 Hz. Inspected the narrow preview and wide fixture layout. Touch behavior and
 Windows WebView2 interaction were not exercised in this refinement.
+
+## Skill consolidation and installation repair
+
+Tests cover complete-folder comparison, support-file differences, executable bits, external symlink rejection, explicit desktop source selection, stale review rejection, preserved unrelated destinations, link failure rollback, hard-interruption recovery, backups, and repeat operations. Installation tests cover regular launchers, old symlink migration, optional CLI setup, name collisions, bundle validation, rollback, shell metacharacters in paths, and Windows user-PATH preservation. Native Windows installer interaction remains an acceptance check.

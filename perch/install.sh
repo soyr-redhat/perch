@@ -28,7 +28,20 @@ fi
 
 mkdir -p "$install_dir" "$bin_dir"
 stage="$(mktemp -d "$install_dir/.perch-install.XXXXXX")"
-cleanup() { rm -rf "$stage"; }
+installed=false
+app_changed=false
+cli_changed=false
+launcher_changed=false
+target="$install_dir/Perch.app"
+backup=""
+cleanup() {
+  if [ "$installed" = false ]; then
+    if [ "$launcher_changed" = true ]; then rm -f "$bin_dir/perch"; [ ! -e "$stage/previous-perch" ] && [ ! -L "$stage/previous-perch" ] || mv "$stage/previous-perch" "$bin_dir/perch"; fi
+    if [ "$cli_changed" = true ]; then rm -f "$bin_dir/perch-cli"; [ ! -e "$stage/previous-cli" ] && [ ! -L "$stage/previous-cli" ] || mv "$stage/previous-cli" "$bin_dir/perch-cli"; fi
+    if [ "$app_changed" = true ]; then rm -rf "$target"; [ -z "$backup" ] || mv "$backup" "$target"; fi
+  fi
+  rm -rf "$stage"
+}
 trap cleanup EXIT HUP INT TERM
 
 archive="$stage/$asset"
@@ -50,25 +63,41 @@ if [ ! -x "$app/Contents/MacOS/perch-cli" ]; then
   exit 1
 fi
 
-target="$install_dir/Perch.app"
-backup=""
+# Do not replace another program that happens to use the same command name.
+for name in perch perch-cli; do
+  command_path="$bin_dir/$name"
+  if [ -L "$command_path" ]; then
+    case "$(readlink "$command_path")" in
+      */Perch.app/Contents/MacOS/perch-cli) ;;
+      *) echo "$command_path belongs to another installation; left unchanged." >&2; exit 1 ;;
+    esac
+  elif [ -e "$command_path" ] && ! head -c 8192 "$command_path" | grep -q '^# Perch managed launcher$'; then
+    echo "$command_path belongs to another program; left unchanged." >&2
+    exit 1
+  fi
+done
+
+# Quote a literal path without evaluating shell substitutions in folder names.
+shell_path=$(printf '%s' "$target/Contents/MacOS/perch-cli" | sed 's/[\\"$`]/\\&/g')
+printf '#!/bin/sh\n# Perch managed launcher\nexec "%s" "$@"\n' "$shell_path" > "$stage/launcher"
+chmod 755 "$stage/launcher"
+
 if [ -e "$target" ]; then
   backup="$install_dir/.Perch.app.previous.$$"
   mv "$target" "$backup"
 fi
-if ! mv "$app" "$target"; then
-  [ -z "$backup" ] || mv "$backup" "$target"
-  echo "Could not install Perch." >&2
-  exit 1
-fi
-[ -z "$backup" ] || rm -rf "$backup"
+app_changed=true
+mv "$app" "$target"
 
-ln -sfn "$target/Contents/MacOS/perch-cli" "$bin_dir/perch"
-ln -sfn "$target/Contents/MacOS/perch-cli" "$bin_dir/perch-cli"
+if [ -e "$bin_dir/perch-cli" ] || [ -L "$bin_dir/perch-cli" ]; then mv "$bin_dir/perch-cli" "$stage/previous-cli"; fi
+cli_changed=true
+cp "$stage/launcher" "$bin_dir/perch-cli"
+if [ -e "$bin_dir/perch" ] || [ -L "$bin_dir/perch" ]; then mv "$bin_dir/perch" "$stage/previous-perch"; fi
+launcher_changed=true
+cp "$stage/launcher" "$bin_dir/perch"
+"$bin_dir/perch-cli" --version >/dev/null
+installed=true
+# Keep the previous application recoverable after a successful upgrade.
 
 echo "Installed Perch to $target"
-case ":$PATH:" in
-  *":$bin_dir:"*) ;;
-  *) echo "Add $bin_dir to PATH to use perch from a terminal." ;;
-esac
-echo "Open it with: open $target"
+echo "Open Perch from Applications. Command-line launchers are optional."

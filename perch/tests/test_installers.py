@@ -61,8 +61,8 @@ class MacInstallerTests(unittest.TestCase):
         result, install_dir, bin_dir = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((install_dir / "Perch.app" / "Contents" / "MacOS" / "perch-cli").is_file())
-        self.assertEqual(os.readlink(bin_dir / "perch"), str(install_dir / "Perch.app" / "Contents" / "MacOS" / "perch-cli"))
-        self.assertEqual(os.readlink(bin_dir / "perch-cli"), str(install_dir / "Perch.app" / "Contents" / "MacOS" / "perch-cli"))
+        self.assertFalse((bin_dir / "perch").is_symlink())
+        self.assertEqual(subprocess.check_output([str(bin_dir / "perch-cli"), "--version"], text=True).strip(), "Perch")
 
     def test_bad_checksum_preserves_existing_install(self):
         existing = self.root / "Applications" / "Perch.app"
@@ -72,3 +72,53 @@ class MacInstallerTests(unittest.TestCase):
         result, install_dir, _ = self.run_installer()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((install_dir / "Perch.app" / "previous").read_text(), "keep")
+
+    def test_upgrade_migrates_symlinks_and_preserves_old_app(self):
+        result, app, bins = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ('perch','perch-cli'):
+            (bins/name).unlink()
+            (bins/name).symlink_to(app/'Perch.app/Contents/MacOS/perch-cli')
+        (app/'Perch.app/old-marker').write_text('previous')
+        result, _, _ = self.run_installer()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertFalse((bins/'perch').is_symlink())
+        self.assertTrue(any((p/'old-marker').exists() for p in app.glob('.Perch.app.previous.*')))
+
+    def test_unrelated_shortcut_preserves_installed_app(self):
+        result, app, bins = self.run_installer()
+        self.assertEqual(result.returncode,0,result.stderr)
+        (app/'Perch.app/old-marker').write_text('keep')
+        (bins/'perch').write_text('unrelated')
+        result, _, _ = self.run_installer()
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual((bins/'perch').read_text(),'unrelated')
+        self.assertEqual((app/'Perch.app/old-marker').read_text(),'keep')
+
+    def test_launcher_quotes_folder_metacharacters(self):
+        # Exercise the actual installed launcher without evaluating folder text.
+        self.root=self.root/'''spaces ' $HOME `echo unsafe`'''
+        self.root.mkdir()
+        self.release=self.root/'releases/latest/download'
+        self.release.mkdir(parents=True)
+        self.make_release('a'*64)
+        # The server handler follows self.root, so the same download URL is valid.
+        result, _, bins=self.run_installer()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(subprocess.check_output([str(bins/'perch'),'--version'],text=True).strip(),'Perch')
+
+    def test_failed_new_executable_rolls_back_app_and_launchers(self):
+        result, app, bins=self.run_installer()
+        self.assertEqual(result.returncode,0,result.stderr)
+        (app/'Perch.app/previous').write_text('keep')
+        previous=(bins/'perch').read_bytes()
+        archive=self.release/'Perch-macOS-arm64.zip'
+        entry=zipfile.ZipInfo('Perch.app/Contents/MacOS/perch-cli')
+        entry.external_attr=0o100755 << 16
+        with zipfile.ZipFile(archive,'w') as bundle:
+            bundle.writestr(entry,'#!/bin/sh\nexit 7\n')
+        (self.release/'SHA256SUMS').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'  '+archive.name+'\n')
+        result, _, _=self.run_installer()
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual((app/'Perch.app/previous').read_text(),'keep')
+        self.assertEqual((bins/'perch').read_bytes(),previous)

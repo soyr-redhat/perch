@@ -37,7 +37,7 @@ try {
         throw 'Release checksum verification failed; Perch was not installed.'
     }
 
-    $Process = Start-Process -FilePath $Installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
+    $Process = Start-Process -FilePath $Installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/DIR="' + $InstallDir + '"')) -Wait -PassThru
     if ($Process.ExitCode -ne 0) {
         throw "Perch installer exited with code $($Process.ExitCode)."
     }

@@ -490,6 +490,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, export_known_session(self.scanner, body.get("agent")))
             except (OSError, ValueError) as exc:
                 self._json(400, {"error": str(exc)})
+        elif path == "/api/skills/review":
+            from . import skill_sharing
+
+            try:
+                if type(body.get("apply", False)) is not bool:
+                    raise ValueError("apply must be a boolean")
+                self._json(200, skill_sharing.review(body.get("name"), body.get("source"), body.get("revision"), body.get("apply", False)))
+            except (OSError, ValueError, TypeError) as exc:
+                self._json(400, {"error": str(exc)})
         elif path == "/api/capabilities/link":
             from . import capabilities
 

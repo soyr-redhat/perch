@@ -59,9 +59,17 @@ Shared tool state lives alongside it:
 - `~/.perch/shared/skills/<name>` links each compatible skill to its detected source. Perch-managed harness skill directories link through this location, so an edit is immediately shared.
 - `~/.perch/shared/mcp/servers.json` stores portable MCP definitions. Perch writes compatible entries into each harness’s native configuration when you apply sharing.
 
-Existing user-managed links and configuration remain in place. Plugin packages, hooks, custom agents, and sign-in state stay with their own harnesses. Supported plugin skills and MCP definitions can be connected individually. Relative MCP paths are resolved within the plugin; unresolved environment variables and host-specific components require an adapter. Authentication and execution permissions remain with each harness.
+Identical skill folders can be consolidated through the shared registry. Perch keeps the authoritative source in place and backs up replaced harness entries. Different contents get an in-app source choice; unrelated entries and MCP configuration remain in place. Plugin packages, hooks, custom agents, and sign-in state stay with their own harnesses. Supported plugin skills and MCP definitions can be connected individually. Relative MCP paths are resolved within the plugin; unresolved environment variables and host-specific components require an adapter. Authentication and execution permissions remain with each harness.
 
 Review one connection with `perch-cli --link RESOURCE_ID --target codex`, using an ID from `--capabilities`. Apply that reviewed change with the same arguments plus `--apply --revision REVISION`. Changes to the source or existing configuration invalidate the review.
+
+### Installation and skill repair
+
+Open **Settings → Installation** in the desktop app to install or repair the local application and optional command-line launchers. macOS launchers are regular files; existing Perch symlinks are migrated without touching their executable. Windows installation repair can restore the installed CLI directory to the user PATH. Unrelated commands are left unchanged. App upgrades preserve the previous macOS bundle; release downloads and automatic in-app updates are not part of this repair control.
+
+**Review sharing** compares complete skill folders, including supporting files and executable permissions. Identical copies use the existing registry source when possible, otherwise an external source folder is preferred. **Choose source…** displays differing files and a bounded `SKILL.md` diff. Selecting a source applies to the destinations enabled in Settings. The optional CLI equivalent is `perch-cli --resolve-skill NAME`, followed by `--skill-source SOURCE_ID` to review that choice and `--apply --revision REVISION` to apply it.
+
+Replaced entries are renamed to hidden sibling backups (`.<name>.perch-backup-<id>`). Migration records live in `~/.perch/skill-migrations`; interrupted changes are restored before another sharing attempt. Backups are retained. Perch does not rewrite embedded harness-specific paths in skill instructions. Trees larger than 100 MB or 10,000 entries, unreadable files, and links outside a skill folder require separate review.
 
 ### Context transfers
 
