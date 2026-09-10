@@ -1,10 +1,10 @@
 # Pre-merge verification
 
-This audit covers the desktop rebuild on `feat/desktop-workspace`, including the vertical prompt rail. It does not approve merging or claim that every external harness feature is portable.
+This audit covers the desktop workspace, release installers, and activity navigation. It does not claim that every external harness feature is portable.
 
 ## Reproducible checks
 
-Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check src/perch/static/app.js` from the `perch` project directory. The suite currently contains 64 tests. Runtime tests use temporary configurations and a local fixture CLI that never contacts a model. The same tests run on macOS and Windows in GitHub Actions.
+Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check src/perch/static/app.js` from the `perch` project directory. The suite currently contains 69 tests. Runtime tests use temporary configurations and a local fixture CLI that never contacts a model. The same tests run on macOS and Windows in GitHub Actions.
 
 `scripts/check_packaged.py <packaged-cli>` exercises the built executable, second-launch activation, authenticated backend, WebSocket input, a real terminal child, recorded output, headless replies, and terminal cleanup. This catches runtime failures that an import or `--version` check misses.
 
@@ -21,7 +21,7 @@ Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check
 
 An isolated production-server fixture was operated through the UI. Verified: first/latest prompt navigation across 160 prompts; drafts across session changes; typing and focus during 20 snapshots at 10 Hz; terminal input/output; forced socket disconnect followed by reconnection to the same PID; search focus during terminal updates; stop confirmation and removal; sharing preview/apply and a second preview with no additions; settings persistence; theme changes.
 
-A rebuilt macOS demo `.app` was also operated as a native application. Verified: application window, Workspace menu dispatch, native folder dialog and returned path, and copying handoff context then pasting it through the macOS Edit menu. Demo mode cannot write harness configurations or launch model sessions.
+A packaged macOS application was also operated in demo mode. Verified: application window, Workspace menu dispatch, native folder dialog and returned path, and copying handoff context then pasting it through the macOS Edit menu. Demo mode cannot write harness configurations or launch model sessions.
 
 ## Defects found and corrected
 
@@ -45,6 +45,8 @@ A rebuilt macOS demo `.app` was also operated as a native application. Verified:
 - Malformed non-ASCII authentication tokens could abort the HTTP request. They now receive a normal rejection.
 - The desktop content policy blocked pywebview's dynamic bridge, breaking menus and the folder picker. Desktop mode now permits the evaluation required by the installed bridge while browser mode keeps the stricter script policy.
 - Inferred inactivity was labeled as a request for input. It now reads as Idle; actual approval/question states require harness events.
+- A recorded Claude Code reply could appear beside Perch's temporary pending copy. Pending state now clears when a new matching transcript event is observed.
+- Harness names could disappear when a separate harness lookup had not refreshed. Each session snapshot now carries its harness name.
 
 ## Boundaries and remaining release checks
 
@@ -63,7 +65,7 @@ The performance results in `PERFORMANCE.md` are synthetic fixture measurements, 
 
 ## Prompt navigation refinement — September 9, 2026
 
-Replaced the range slider with horizontal marks that extend around the pointer.
+Replaced the range slider with vertical marks that extend around the pointer.
 Pointer movement previews cached prompt snippets without fetching history; clicking
 activates a prompt. Arrow keys, Page Up/Down, and Home/End move the preview;
 Enter/Space activates it, Escape collapses it, and Back to live restores recent activity.

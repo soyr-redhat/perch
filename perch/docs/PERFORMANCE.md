@@ -4,9 +4,9 @@ Synthetic benchmark on the development Mac with Python 3.14.3, compared against 
 
 | Operation | Initial implementation | Updated implementation |
 |---|---:|---:|
-| First scan, 1,000 one-record session files | 31.91 ms | 27.84 ms |
-| Median unchanged scan, same 1,000 files | 24.11 ms | 3.06 ms |
-| Last-prompt history lookup, 100.2 MB JSONL after indexing | 1,401.27 ms | 0.21 ms |
+| First scan, 1,000 one-record session files | 34.45 ms | 33.70 ms |
+| Median unchanged scan, same 1,000 files | 25.86 ms | 5.33 ms |
+| Last-prompt history lookup, 100.2 MB JSONL after indexing | 1,475.61 ms | 0.27 ms |
 | Peak Python allocation during that history lookup | 110.3 MB | 0.142 MB |
 | Consecutive unchanged snapshots compare equal | No | Yes |
 
