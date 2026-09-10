@@ -170,6 +170,15 @@ class EnablementTests(unittest.TestCase):
         self.assertEqual(again['skills']['linked'], [])
         self.assertEqual(again['mcp']['added'], {})
 
+    def test_disabled_plugin_is_not_reexported_through_existing_shared_links(self):
+        sync.sync_all(targets=('omp',))
+        self.plugins[0].update(active=False, disabled=True)
+        report = sync.sync_all(dry_run=True)
+        self.assertFalse(any(x['skill'] == 'plugin-review' for x in report['skills']['linked']))
+        self.assertFalse(any('plugin-tools' in names for names in report['mcp']['added'].values()))
+        self.assertTrue((Path(sync.SKILL_ROOTS['omp']) / 'plugin-review').is_dir())
+        self.assertFalse((Path(sync.SKILL_ROOTS['codex']) / 'plugin-review').exists())
+
     def test_dependency_in_reference_blocks_auto_and_manual_transfer(self):
         skill = Path(self.plugins[0]['components'][0]['path'])
         (skill / 'reference.md').write_text('Call mcp__codex_apps__example to use this skill.')

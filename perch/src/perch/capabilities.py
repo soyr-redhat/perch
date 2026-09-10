@@ -375,8 +375,18 @@ def sharing_sources(plugins=None):
         errors = []
     groups, skipped = {}, []
     native, native_mcp, withheld = {}, {}, {"skill": [], "mcp": []}
+    linked_sources = {item["name"]: set(item["origins"].values()) for item in sync.skill_inventory()}
     for plugin in plugins:
         if not plugin.get("active", False) or plugin.get("disabled") or plugin.get("scope", "user") != "user":
+            for component in plugin["components"]:
+                kind, name = component["kind"], component["name"]
+                if kind not in withheld:
+                    continue
+                linked = kind == "skill" and str(Path(component["path"]).resolve()) in linked_sources.get(name, set())
+                if plugin.get("disabled") or linked:
+                    withheld[kind].append(name)
+                    skipped.append({"skill" if kind == "skill" else "server": name,
+                                    "reason": "Source plugin is disabled or no longer confirmed enabled; existing connections are preserved"})
             continue
         for component in plugin["components"]:
             kind, name = component["kind"], component["name"]
