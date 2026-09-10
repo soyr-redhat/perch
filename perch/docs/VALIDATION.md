@@ -100,3 +100,19 @@ backend/terminal/transfer smoke checks. Native macOS settings rendered correctly
 screen capture failed during subsequent interaction, so the remaining navigation
 check used the isolated bridge preview. Windows GUI, touch, and narrow-layout checks
 remain outstanding for this refinement. Motion respects reduced-motion preferences.
+
+## Resource workspace — September 10, 2026
+
+Replaced the resource matrix with a browse list and a persistent detail pane. Compact
+windows use the same detail content with Back navigation; category selection remains
+visible. Connection reviews and results stay in the detail pane. Search is optional.
+Selection and category indicators animate with transforms; reduced-motion preferences
+disable transitions and detail animations. No rendering dependency or continuous
+animation loop was added.
+
+Browser fixtures exercised keyboard selection/activation, compact Back navigation,
+wide layout rendering, empty-category recovery, and inline review/application through
+the real linking endpoint. Three dependency-free Node regressions cover out-of-order
+reviews, cancellation, repeated Apply clicks, navigation during application, and error
+recovery. The Python test suite includes these checks when Node is installed (CI has
+Node). Physical touch input and Windows WebView2 remain acceptance checks.

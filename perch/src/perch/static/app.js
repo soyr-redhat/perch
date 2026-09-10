@@ -7,7 +7,7 @@ const activityLabel = s => ({working:'Active',waiting:'Idle',quiet:'Recent'}[s]|
 const names = {claude:'Claude Code',codex:'Codex',omp:'omp','claude-desktop':'Claude Desktop','codex-legacy':'Codex (legacy)'};
 const state = {snap:null, selected:localStorage.getItem('perch.selected'), filter:'all', search:'', page:'tools',
   tab:'activity', terms:new Map(), feedKey:'', sidebarKey:'', tabsKey:'', history:null, historyRequest:0, promptNav:null,
-  tools:null, toolTab:'all', resourceSearch:'', cfg:null, connected:false, follow:true};
+  tools:null, toolTab:'all', resourceSearch:'', resourceId:null, resourceReview:null, cfg:null, connected:false, follow:true};
 let events, toastTimer;
 function ago(ts) {
   const seconds = Math.max(0, (Date.now() - (typeof ts === 'number' ? ts*1000 : Date.parse(ts))) / 1000);
@@ -280,27 +280,94 @@ function showTransfer(receipt) {
   $('#refresh-transfer').onclick=guard(async()=>showTransfer(await api('/api/transfers/'+receipt.id)));
   if($('#send-transfer'))$('#send-transfer').onclick=async()=>{const button=$('#send-transfer');button.disabled=true;try{await api('/api/transfers/send',{id:receipt.id});showTransfer(await api('/api/transfers/'+receipt.id));}catch(e){$('#transfer-status').textContent=e.message;button.disabled=false;}};
 }
-async function openTools() {
-  state.page='tools';showPage();renderSidebar();
-  if(!state.tools)$('#tools-table').innerHTML='<p class="empty-list">Reading resources…</p>';
+const resourceKinds={skill:'Skill',mcp:'MCP server',plugin:'Plugin'};
+function resourceIcon(kind) {
+  const paths={skill:'<path d="M6 18C3 8 11 4 19 5c1 8-3 15-11 12M5 21 15 11M11 15v-4"/>',mcp:'<path d="M8 3v4m8-4v4M6 7h12v4a6 6 0 0 1-12 0V7Zm6 10v4"/>',plugin:'<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><path d="M14 17h6m-3-3v6"/>'};
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[kind]||paths.plugin}</svg>`;
+}
+async function loadResources() {
+  if(!state.tools)$('#resource-rows').innerHTML='<p class="empty-list">Reading resources…</p>';
   const refresh=$('#refresh-tools');refresh.disabled=true;refresh.setAttribute('aria-busy','true');
   try {state.tools=await api('/api/capabilities');renderTools();}
   finally {refresh.disabled=false;refresh.removeAttribute('aria-busy');}
 }
+async function openTools() {
+  state.page='tools';showPage();renderSidebar();await loadResources();
+}
+function visibleResources() {
+  return state.tools.resources.filter(r=>(state.toolTab==='all'||r.kind===state.toolTab)&&`${r.name} ${r.kind} ${Object.keys(r.origins).join(' ')}`.toLowerCase().includes(state.resourceSearch));
+}
+function moveResourceIndicators() {
+  for(const [parent,selector,marker] of [['#resource-list','[aria-current="true"]','.resource-indicator'],['.tools-tabs','.selected','.category-indicator']]){
+    const root=$(parent),selected=root.querySelector(selector),indicator=root.querySelector(marker);
+    indicator.hidden=!selected;if(!selected)continue;
+    indicator.style.transform=`translate(${selected.offsetLeft}px,${selected.offsetTop}px)`;
+    indicator.style.width=selected.offsetWidth+'px';indicator.style.height=selected.offsetHeight+'px';
+  }
+}
 function renderTools() {
   if(!state.tools)return;
-  const {resources,targets,errors}=state.tools;
+  const {resources,errors}=state.tools;
   $('#tools-count').textContent=resources.length;
   $('#resource-errors').hidden=!errors.length;$('#resource-errors').textContent=errors.map(e=>`${e.source}: ${e.reason}`).join(' · ');
-  const labels={present:'Present',available:'Link',review:'Review',blocked:'Blocked',unsupported:'Unavailable',disabled:'Disabled',components:'Components'};
-  const data=resources.filter(r=>(state.toolTab==='all'||r.kind===state.toolTab)&&`${r.name} ${r.kind} ${Object.keys(r.origins).join(' ')}`.toLowerCase().includes(state.resourceSearch));
-  $('#tools-table').innerHTML=data.length?`<table><thead><tr><th>Resource</th><th>Source</th>${targets.map(t=>`<th>${esc(t.name)}</th>`).join('')}</tr></thead><tbody>${data.map(r=>`<tr><td>${r.kind==='skill'&&!r.plugin?`<button class="resource-name" data-inspect-skill="${esc(r.name)}">${esc(r.name)}</button>`:`<strong>${esc(r.name)}</strong>`}<small>${esc(r.kind)}${r.plugin?' · plugin component':''}</small></td><td>${Object.keys(r.origins).map(h=>esc(names[h]||h)).join(', ')}<small>${esc(r.discovery)}</small></td>${targets.map(t=>{const c=r.compatibility[t.id];return `<td>${['review','available'].includes(c.status)?`<button class="connection-action" data-resource="${esc(r.id)}" data-destination="${esc(t.id)}" aria-label="Review ${esc(r.name)} connection to ${esc(t.name)}"><span aria-hidden="true">＋</span> Connect</button>`:`<span class="presence ${c.status==='present'?'':'missing'}" title="${esc(c.reason)}">${esc(labels[c.status]||c.status)}</span>`}</td>`;}).join('')}</tr>`).join('')}</tbody></table>`:'<p class="empty-list">No matching resources.</p>';
+  const data=visibleResources(),previous=state.resourceId;
+  if(!data.some(r=>r.id===state.resourceId))state.resourceId=data[0]?.id||null;
+  if(previous!==state.resourceId)state.resourceReview=null;
+  const focused=document.activeElement?.dataset.selectResource,scroll=$('#resource-list-scroll').scrollTop;
+  $('#resource-rows').innerHTML=data.length?data.map(r=>{
+    const present=state.tools.targets.filter(t=>r.compatibility[t.id]?.status==='present');
+    return `<button class="resource-row" data-select-resource="${esc(r.id)}" aria-current="${r.id===state.resourceId}" tabindex="${r.id===state.resourceId?0:-1}"><span class="resource-symbol">${resourceIcon(r.kind)}</span><span class="resource-row-text"><strong>${esc(r.name)}</strong><small>${esc(resourceKinds[r.kind]||r.kind)}${r.plugin?' · '+esc(resources.find(p=>p.id===r.plugin)?.name||'Plugin'):''}</small></span><span class="resource-presence" aria-label="Present in ${present.length} harness${present.length===1?'':'es'}" title="${esc(present.map(t=>t.name).join(', ')||'No connections')}">${present.length?present.map(()=>'<i></i>').join(''):'<i class="empty"></i>'}</span></button>`;
+  }).join(''):'<p class="empty-list">No resources in this view.</p>';
+  $('#resource-list-scroll').scrollTop=scroll;
+  if(focused)[...document.querySelectorAll('[data-select-resource]')].find(x=>x.dataset.selectResource===(data.some(r=>r.id===focused)?focused:state.resourceId))?.focus({preventScroll:true});
+  document.querySelectorAll('[data-tooltab]').forEach(x=>{x.classList.toggle('selected',x.dataset.tooltab===state.toolTab);x.setAttribute('aria-pressed',String(x.dataset.tooltab===state.toolTab));});
+  renderResourceDetail(previous!==state.resourceId);requestAnimationFrame(moveResourceIndicators);
+}
+function selectResource(id,{keyboard=false}={}) {
+  if(!state.tools.resources.some(r=>r.id===id))return;
+  const changed=id!==state.resourceId;state.resourceId=id;
+  if(changed)state.resourceReview=null;
+  if(!keyboard)$('#resource-workspace').classList.add('detail-open');
+  document.querySelectorAll('[data-select-resource]').forEach(x=>{const selected=x.dataset.selectResource===id;x.setAttribute('aria-current',String(selected));x.tabIndex=selected?0:-1;if(selected&&keyboard){x.focus({preventScroll:true});x.scrollIntoView({block:'nearest'});}});
+  renderResourceDetail(changed);moveResourceIndicators();
+  if(!keyboard&&getComputedStyle($('#resource-list-scroll')).display==='none'){$('#resource-detail').scrollTop=0;$('#resource-detail-title')?.focus({preventScroll:true});}
+}
+function renderResourceDetail(animate=false) {
+  const r=state.tools.resources.find(r=>r.id===state.resourceId),detail=$('#resource-detail');
+  if(!r){detail.dataset.key='';detail.innerHTML='<p class="empty-list">Select a resource to view its connections.</p>';$('#resource-workspace').classList.remove('detail-open');return;}
+  const key=JSON.stringify([r,state.resourceReview]);if(detail.dataset.key===key)return;detail.dataset.key=key;
+  const labels={present:'Present',available:'Connect',review:'Review connection',blocked:'Needs attention',unsupported:'Unavailable',disabled:'Disabled',components:'Components'};
+  const components=state.tools.resources.filter(x=>x.plugin===r.id);
+  detail.innerHTML=`<button class="inline-action resource-back" id="resource-back">‹ Resources</button><div class="resource-detail-content"><div class="resource-identity"><span class="resource-emblem">${resourceIcon(r.kind)}</span><span>${esc(resourceKinds[r.kind]||r.kind)}${r.discovery==='cached'?' · Cached':''}</span></div><h2 id="resource-detail-title" tabindex="-1">${esc(r.name)}</h2>${r.plugin?`<button class="inline-action resource-parent" data-open-resource="${esc(r.plugin)}">${esc(state.tools.resources.find(x=>x.id===r.plugin)?.name||'Plugin')}</button>`:''}<div class="detail-section"><h3>${r.kind==='plugin'?'Components':'Harnesses'}</h3>${r.kind==='plugin'?(components.length?components.map(c=>`<button class="navigation-row" data-open-resource="${esc(c.id)}"><span>${esc(c.name)}<small>${esc(resourceKinds[c.kind]||c.kind)}</small></span><span class="row-chevron" aria-hidden="true">›</span></button>`).join(''):'<p class="detail-muted">No portable components detected.</p>'):state.tools.targets.map(t=>{
+    const c=r.compatibility[t.id]||{status:'unsupported',reason:'No compatibility information'},actionable=['review','available'].includes(c.status);
+    const content=`<span class="harness-monogram" aria-hidden="true">${esc(t.name.slice(0,1))}</span><span class="harness-connection-label"><strong>${esc(t.name)}</strong>${['blocked','disabled','unsupported'].includes(c.status)&&c.reason?`<small>${esc(c.reason)}</small>`:''}</span><span class="connection-state ${c.status==='present'?'is-present':''}">${c.status==='present'?'<i aria-hidden="true"></i>':''}${esc(labels[c.status]||c.status)}${actionable?'<span aria-hidden="true"> ›</span>':''}</span>`;
+    return actionable?`<button class="harness-connection" data-resource="${esc(r.id)}" data-destination="${esc(t.id)}">${content}</button>`:`<div class="harness-connection">${content}</div>`;
+  }).join('')}</div><div id="connection-review" class="connection-review" ${state.resourceReview?'':'hidden'}>${connectionReviewHtml()}</div><div class="detail-section resource-sources"><h3>Sources</h3>${Object.entries(r.origins).map(([h,path])=>`<div class="source-location"><strong>${esc(names[h]||h)}</strong>${path?`<span>${esc(path)}</span>`:''}</div>`).join('')}${r.kind==='skill'&&!r.plugin?`<button class="navigation-row source-review-link" data-inspect-skill="${esc(r.name)}"><span>Review shared source</span><span class="row-chevron" aria-hidden="true">›</span></button>`:''}</div></div>`;
+  if(animate){detail.scrollTop=0;if(!matchMedia('(prefers-reduced-motion: reduce)').matches){detail.getAnimations().forEach(a=>a.cancel());detail.animate([{opacity:.35,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}],{duration:190,easing:'cubic-bezier(.2,.7,.2,1)'});}}
+}
+function connectionReviewHtml() {
+  const review=state.resourceReview;if(!review)return '';
+  return `<h3>${esc(state.tools.targets.find(t=>t.id===review.target)?.name||review.target)}</h3><p id="link-status" role="status">${esc(review.error||review.plan?.reason||(review.loading?'Checking compatibility…':'Ready to connect.'))}</p><div class="connection-review-actions"><button class="text-button" id="cancel-connection" ${review.busy?'disabled':''}>Cancel</button>${review.plan&&review.plan.status!=='blocked'?`<button class="primary" id="apply-connection" ${review.busy?'disabled':''}>${review.busy?'Connecting…':'Connect'}</button>`:''}</div>`;
+}
+function paintConnectionReview() {
+  const panel=$('#connection-review');if(!panel)return;panel.hidden=!state.resourceReview;panel.innerHTML=connectionReviewHtml();
 }
 async function reviewConnection(id,target) {
-  const resource=state.tools.resources.find(r=>r.id===id);
-  const plan=await api('/api/capabilities/link',{id,target});
-  dialog(`Connect ${resource.name}`,`<p>${esc(names[target]||target)}</p><label class="field">Source<input readonly value="${esc(Object.values(resource.origins).filter(Boolean).join(', '))}"></label><p id="link-status" role="status">${esc(plan.reason||'Add this resource without replacing existing configuration.')}</p>`,`<button data-dismiss>Close</button>${plan.status!=='blocked'?'<button class="primary" id="apply-connection">Connect</button>':''}`);
-  if($('#apply-connection'))$('#apply-connection').onclick=async()=>{const button=$('#apply-connection');button.disabled=true;try{const result=await api('/api/capabilities/link',{id,target,revision:plan.revision,apply:true});$('#link-status').textContent=result.applied?'Connected.':result.reason;button.hidden=result.applied;await openTools();}catch(e){$('#link-status').textContent=e.message;}finally{button.disabled=false;}};
+  const review={id,target,loading:true};state.resourceReview=review;paintConnectionReview();
+  const detail=$('#resource-detail'),panel=$('#connection-review');
+  detail.scrollBy({top:Math.max(0,panel.getBoundingClientRect().bottom-detail.getBoundingClientRect().bottom+16),behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+  try {const plan=await api('/api/capabilities/link',{id,target});if(state.resourceReview===review){review.plan=plan;review.loading=false;paintConnectionReview();}}
+  catch(error){if(state.resourceReview===review){review.error=error.message;review.loading=false;paintConnectionReview();}}
+}
+async function applyResourceConnection() {
+  const review=state.resourceReview;if(!review?.plan||review.busy)return;
+  review.busy=true;review.error=null;paintConnectionReview();
+  try {
+    const result=await api('/api/capabilities/link',{id:review.id,target:review.target,revision:review.plan.revision,apply:true});
+    if(result.applied){if(state.resourceReview===review){state.resourceReview=null;paintConnectionReview();}toast('Connected');await loadResources();if(state.page==='tools'&&state.resourceId===review.id&&!state.resourceReview&&!$('#dialog').open)$('#resource-detail-title')?.focus({preventScroll:true});}
+    else if(state.resourceReview===review){review.error=result.reason||'Connection was not applied.';}
+  }catch(error){if(state.resourceReview===review)review.error=error.message;}
+  finally{review.busy=false;if(state.resourceReview===review)paintConnectionReview();}
 }
 async function resolveSkill(name,source=null) {
   const previous=source?$('#skill-sources'):null;
@@ -354,7 +421,29 @@ $('.filters').onclick=e=>{const button=e.target.closest('[data-filter]');if(!but
 $('#search').oninput=e=>{state.search=e.target.value.toLowerCase();renderSidebar();};
 $('#new-session').onclick=newSession;$('#welcome-new').onclick=newSession;$('#welcome-tools').onclick=guard(openTools);
 $('#resources-nav').onclick=guard(openTools);$('#conversations-nav').onclick=()=>{state.page='sessions';showPage();renderSidebar();renderSession();};
-$('#resource-search').oninput=e=>{state.resourceSearch=e.target.value.toLowerCase();renderTools();};$('#tools-table').onclick=guard(async e=>{const skill=e.target.closest('[data-inspect-skill]');if(skill){await resolveSkill(skill.dataset.inspectSkill);return;}const button=e.target.closest('[data-resource]');if(button)await reviewConnection(button.dataset.resource,button.dataset.destination);});$('#settings-nav').onclick=guard(settings);$('#retry').onclick=guard(boot);
+function toggleResourceSearch(open=true) {
+  $('#resource-find').hidden=!open;$('#toggle-resource-search').setAttribute('aria-expanded',String(open));
+  if(open)$('#resource-search').focus();else{state.resourceSearch='';$('#resource-search').value='';renderTools();$('#toggle-resource-search').focus();}
+}
+$('#toggle-resource-search').onclick=()=>toggleResourceSearch($('#resource-find').hidden);
+$('#resource-search').oninput=e=>{state.resourceSearch=e.target.value.toLowerCase();renderTools();};
+$('#resource-search').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();toggleResourceSearch(false);}};
+$('#resource-rows').onclick=e=>{const row=e.target.closest('[data-select-resource]');if(row)selectResource(row.dataset.selectResource);};
+$('#resource-rows').onkeydown=e=>{
+  const row=e.target.closest('[data-select-resource]');if(!row)return;
+  const rows=[...document.querySelectorAll('[data-select-resource]')],index=rows.indexOf(row);
+  const next={ArrowDown:index+1,ArrowUp:index-1,Home:0,End:rows.length-1}[e.key];
+  if(next!==undefined){e.preventDefault();selectResource(rows[Math.max(0,Math.min(rows.length-1,next))].dataset.selectResource,{keyboard:true});}
+};
+$('#resource-detail').onclick=guard(async e=>{
+  const back=e.target.closest('#resource-back');if(back){$('#resource-workspace').classList.remove('detail-open');document.querySelector('[data-select-resource][aria-current="true"]')?.focus({preventScroll:true});return;}
+  const other=e.target.closest('[data-open-resource]');if(other){state.toolTab='all';state.resourceSearch='';$('#resource-search').value='';state.resourceId=other.dataset.openResource;state.resourceReview=null;renderTools();selectResource(state.resourceId);return;}
+  const skill=e.target.closest('[data-inspect-skill]');if(skill){await resolveSkill(skill.dataset.inspectSkill);return;}
+  const connection=e.target.closest('[data-resource]');if(connection){if(!state.resourceReview?.busy)await reviewConnection(connection.dataset.resource,connection.dataset.destination);return;}
+  if(e.target.closest('#cancel-connection')&&!state.resourceReview?.busy){const target=state.resourceReview?.target;state.resourceReview=null;paintConnectionReview();[...document.querySelectorAll('[data-destination]')].find(x=>x.dataset.destination===target)?.focus({preventScroll:true});}
+  if(e.target.closest('#apply-connection'))await applyResourceConnection();
+});
+$('#settings-nav').onclick=guard(settings);$('#retry').onclick=guard(boot);
 $('#theme').onclick=guard(async()=>{const mode=document.documentElement.dataset.theme==='dark'?'light':'dark';setTheme(mode);if(state.snap?.demo)return;await api('/api/settings',{appearance:{theme:mode}});});
 $('#session-actions').onclick=guard(async e=>{const button=e.target.closest('button');if(!button)return;const menu=button.closest('details');if(menu){menu.open=false;menu.querySelector('summary').focus();}if(button.id==='resume-session'){const a=selected();await spawn(a.harness,a.cwd,a.id.split(':').slice(1).join(':'));}if(button.id==='handoff-session')await handoff();if(button.id==='transfer-session')transferConversation(selected().id);if(button.id==='open-cli-session'){const reply=await window.pywebview.api.open_cli(selected().id);if(reply.error)throw new Error(reply.error);}if(button.id==='open-native-session'){const reply=await window.pywebview.api.open_session(selected().id);if(reply.error)throw new Error(reply.error);}});
 addEventListener('click',e=>{const menu=$('.action-menu[open]');if(menu&&!menu.contains(e.target))menu.open=false;});
@@ -384,10 +473,12 @@ addEventListener('pointerdown',e=>{if(!e.target.closest('#history'))closePromptP
 $('#history-live').onclick=liveHistory;
 $('#feed').onscroll=()=>{const f=$('#feed');state.follow=f.scrollHeight-f.scrollTop-f.clientHeight<60;if(state.follow)$('#follow').hidden=true;};
 $('#follow').onclick=()=>{$('#feed').scrollTop=$('#feed').scrollHeight;state.follow=true;$('#follow').hidden=true;};
-$('.tools-tabs').onclick=e=>{const b=e.target.closest('[data-tooltab]');if(b){state.toolTab=b.dataset.tooltab;document.querySelectorAll('[data-tooltab]').forEach(x=>x.classList.toggle('selected',x===b));renderTools();}};
+$('.tools-tabs').onclick=e=>{const b=e.target.closest('[data-tooltab]');if(b){state.toolTab=b.dataset.tooltab;state.resourceReview=null;$('#resource-workspace').classList.remove('detail-open');renderTools();}};
+new ResizeObserver(()=>requestAnimationFrame(moveResourceIndicators)).observe($('#resource-workspace'));
+new ResizeObserver(()=>requestAnimationFrame(moveResourceIndicators)).observe($('.tools-tabs'));
 $('#refresh-tools').onclick=guard(openTools);$('#preview-sync').onclick=guard(previewSync);
 $('#dialog').onclick=e=>{if(e.target.closest('[data-dismiss]'))$('#dialog').close();};
-addEventListener('keydown',e=>{if($('#dialog').open)return;if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('#search').focus();}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='n'){e.preventDefault();newSession();}});
+addEventListener('keydown',e=>{if($('#dialog').open)return;if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();if(state.page==='tools')toggleResourceSearch(true);else $('#search').focus();}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='n'){e.preventDefault();newSession();}});
 new ResizeObserver(()=>{const t=state.terms.get(state.tab);if(t&&state.page==='sessions')t.fit.fit();}).observe($('#terminal-mount'));
 const splitter=$('.splitter');function paneWidth(width){width=Math.max(230,Math.min(460,width));document.documentElement.style.setProperty('--sidebar-width',width+'px');splitter.setAttribute('aria-valuenow',width);localStorage.setItem('perch.sidebarWidth',width);}
 paneWidth(Number(localStorage.getItem('perch.sidebarWidth'))||290);
