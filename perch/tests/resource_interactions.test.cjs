@@ -48,3 +48,21 @@ test('failed linking keeps the review retryable and reports the error',async()=>
   assert.equal(review.error,'Source changed; review again.');assert.match(f.panel.innerHTML,/Source changed/);
   assert.equal(f.refreshes(),0);assert.deepEqual(f.notices,[]);
 });
+
+test('late sign-in responses cannot update a different resource or detached view',async()=>{
+  const requests=[],node={textContent:'Original'};
+  let current=node;
+  const context=vm.createContext({state:{resourceId:'server-a'},$:()=>current,
+    clearTimeout(){},setTimeout(){},resourceAuthJob:null,resourceAuthTimer:null,
+    refreshResourceAuth:async()=>{},api:(url,body)=>new Promise(resolve=>requests.push({body,resolve}))});
+  vm.runInContext(source.slice(source.indexOf('async function signInResource('),source.indexOf('const resourceKinds=')),context);
+  const first=context.signInResource('server-a');
+  context.state.resourceId='server-b';requests[0].resolve({id:'old-job'});await first;
+  assert.equal(node.textContent,'Original');assert.equal(requests.length,1);
+  context.state.resourceId='server-a';
+  const second=context.signInResource('server-a');requests[1].resolve({id:'new-job'});
+  await new Promise(resolve=>setImmediate(resolve));
+  const before=node.textContent;current=null;
+  requests[2].resolve({status:'failed',error:'Old failure'});await second;
+  assert.equal(node.textContent,before);
+});

@@ -342,10 +342,23 @@ async function refreshResourceAuth(id) {
   }catch(e){if(state.resourceId===id&&$('#resource-auth-status'))$('#resource-auth-status').textContent=e.message;}
 }
 async function signInResource(id) {
-  const job=await api('/api/mcp/auth',{id,action:'sign-in'});resourceAuthJob=job.id;
-  $('#resource-sign-in').hidden=true;$('#resource-cancel-auth').hidden=false;$('#resource-auth-status').textContent='Complete sign-in in your browser…';
+  const node=$('#resource-auth-status');
+  const active=()=>state.resourceId===id&&$('#resource-auth-status')===node;
+  const job=await api('/api/mcp/auth',{id,action:'sign-in'});
+  if(!active())return;
+  resourceAuthJob=job.id;
+  $('#resource-sign-in').hidden=true;$('#resource-cancel-auth').hidden=false;node.textContent='Complete sign-in in your browser…';
   clearTimeout(resourceAuthTimer);
-  const poll=async()=>{if(state.resourceId!==id||!$('#resource-auth-status'))return;try{const data=await api('/api/mcp/auth',{action:'job',job:job.id});if(data.status==='signing-in'){resourceAuthTimer=setTimeout(poll,1500);return;}$('#resource-cancel-auth').hidden=true;resourceAuthJob=null;await refreshResourceAuth(id);if(data.error)$('#resource-auth-status').textContent=data.error;}catch(e){$('#resource-auth-status').textContent=e.message;$('#resource-sign-in').hidden=false;$('#resource-cancel-auth').hidden=true;}};
+  const poll=async()=>{
+    if(!active()||resourceAuthJob!==job.id)return;
+    try{
+      const data=await api('/api/mcp/auth',{action:'job',job:job.id});
+      if(!active()||resourceAuthJob!==job.id)return;
+      if(data.status==='signing-in'){resourceAuthTimer=setTimeout(poll,1500);return;}
+      $('#resource-cancel-auth').hidden=true;resourceAuthJob=null;await refreshResourceAuth(id);
+      if(active()&&data.error)node.textContent=data.error;
+    }catch(e){if(active()){node.textContent=e.message;$('#resource-sign-in').hidden=false;$('#resource-cancel-auth').hidden=true;}}
+  };
   await poll();
 }
 const resourceKinds={skill:'Skill',mcp:'MCP server',plugin:'Plugin'};
