@@ -60,3 +60,16 @@ A rebuilt macOS demo `.app` was also operated as a native application. Verified:
 - Skills/MCP compatibility does not imply transferable OAuth sessions, plugins, hooks, agent definitions, or private conversation state. See `INTEROPERABILITY.md`.
 
 The performance results in `PERFORMANCE.md` are synthetic fixture measurements, not measured end-to-end latency across every user's machine.
+
+## Prompt navigation refinement — September 9, 2026
+
+Replaced the range slider with horizontal marks that extend around the pointer.
+Pointer movement previews cached prompt snippets without fetching history; clicking
+activates a prompt. Arrow keys, Page Up/Down, and Home/End move the preview;
+Enter/Space activates it, Escape collapses it, and Back to live restores recent activity.
+
+Interactive checks used the two-prompt demo and isolated one- and 160-prompt fixtures.
+Verified compact sizing, tapered mark widths, preview without navigation, click
+selection, keyboard preview/activation, first/middle/last history contents, return
+to live, session switching, and stable preview/focus through 20 snapshots at 10 Hz. Inspected the narrow preview and wide fixture layout. Touch behavior and
+Windows WebView2 interaction were not exercised in this refinement.
