@@ -4,7 +4,7 @@ This audit covers the desktop workspace, release installers, and activity naviga
 
 ## Reproducible checks
 
-Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check src/perch/static/app.js` from the `perch` project directory. The suite currently contains 71 tests. Runtime tests use temporary configurations and a local fixture CLI that never contacts a model. The same tests run on macOS and Windows in GitHub Actions.
+Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check src/perch/static/app.js` from the `perch` project directory. Runtime tests use temporary configurations and a local fixture CLI that never contacts a model. The same tests run on macOS and Windows in GitHub Actions.
 
 `scripts/check_packaged.py <packaged-cli>` exercises the built executable, second-launch activation, authenticated backend, WebSocket input, a real terminal child, recorded output, headless replies, and terminal cleanup. This catches runtime failures that an import or `--version` check misses.
 
