@@ -301,6 +301,20 @@ class Handler(BaseHTTPRequestHandler):
             self._events()
         elif path == "/api/history":
             self._history()
+        elif path == "/api/capabilities":
+            from . import capabilities, demo
+
+            try:
+                self._json(200, capabilities.inventory(base=demo.tools(), plugins=[]) if self.server.demo else capabilities.inventory())
+            except (OSError, ValueError) as exc:
+                self._json(400, {"error": str(exc)})
+        elif path.startswith("/api/transfers/"):
+            from . import transfers
+
+            try:
+                self._json(200, transfers.read(self.scanner, path.removeprefix("/api/transfers/")))
+            except (OSError, ValueError):
+                self._json(404, {"error": "Transfer not found"})
         elif path.startswith("/api/conversations/"):
             from .conversations import archive_path
             from .storage import DATA_DIR
@@ -476,6 +490,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, export_known_session(self.scanner, body.get("agent")))
             except (OSError, ValueError) as exc:
                 self._json(400, {"error": str(exc)})
+        elif path == "/api/capabilities/link":
+            from . import capabilities
+
+            try:
+                if type(body.get("apply", False)) is not bool:
+                    raise ValueError("apply must be a boolean")
+                self._json(200, capabilities.link(body.get("id"), body.get("target"), revision=body.get("revision"), apply=body.get("apply", False)))
+            except (OSError, ValueError, TypeError) as exc:
+                self._json(400, {"error": str(exc)})
+        elif path in ("/api/transfers/prepare", "/api/transfers/send"):
+            from . import transfers
+
+            try:
+                if path.endswith("prepare"):
+                    self._json(200, transfers.prepare(self.scanner, body.get("source"), body.get("target"), body.get("id")))
+                else:
+                    receipt = transfers.read(self.scanner, body.get("id"))
+                    if receipt["status"] != "prepared":
+                        self._json(200, receipt)
+                    else:
+                        self._message({"agent": receipt["target"], "text": receipt["prompt"]}, transfer=receipt["id"])
+            except (OSError, ValueError, TypeError) as exc:
+                self._json(400, {"error": str(exc)})
         elif path == "/api/sync":
             self._sync(body)
         elif path == "/api/tools":
@@ -501,7 +538,7 @@ class Handler(BaseHTTPRequestHandler):
         self.scanner.apply_settings(cfg)
         self._json(200, {"ok": True, "settings": cfg})
 
-    def _message(self, body: dict):
+    def _message(self, body: dict, transfer=None):
         agent_id = (body.get("agent") or "").strip()
         text = (body.get("text") or "").strip()
         if not agent_id or not text:
@@ -519,6 +556,9 @@ class Handler(BaseHTTPRequestHandler):
         if not agent or not adapter.enabled:
             self._json(404, {"error": "Session is not available"})
             return
+        if transfer and agent.get("state") == "working":
+            self._json(409, {"error": "The destination appears active. Wait for it to become idle before sending context."})
+            return
         with self.server.delivery_lock:
             if self.server.stop_event.is_set():
                 self._json(503, {"error": "Perch is shutting down"})
@@ -529,13 +569,22 @@ class Handler(BaseHTTPRequestHandler):
             if any(t["harness"] == harness_id and t.get("session") == session and t["alive"] for t in self.terms.list()):
                 self._json(409, {"error": "This session is open in a terminal. Send the message there."})
                 return
+            if transfer:
+                from . import transfers
+
+                if not transfers.claim(self.scanner, transfer):
+                    self._json(200, transfers.read(self.scanner, transfer))
+                    return
             self.server.delivering.add(agent_id)
         entry = self.pending.add(agent_id, text, agent.get("tail") or [])
+        if transfer:
+            entry["transfer"] = transfer
         threading.Thread(target=self._deliver, args=(agent_id, entry, argv, cwd), daemon=True).start()
-        self._json(200, {"ok": True})
+        self._json(200, {"ok": True, **({"id": transfer, "status": "running"} if transfer else {})})
 
     def _deliver(self, agent_id: str, entry: dict, argv: list[str], cwd: str):
         proc = None
+        outcome = "failed"
         try:
             from .term import external_process_env
 
@@ -550,12 +599,14 @@ class Handler(BaseHTTPRequestHandler):
                         creationflags=0x08000000 if os.name == "nt" else 0,
                     )
                 self.server.deliveries.add(proc)
+                outcome = "uncertain"
             _, err = proc.communicate(timeout=900)
             if proc.returncode:
                 detail = err.decode("utf-8", "replace")[-400:].strip()
                 self.pending.fail(agent_id, entry, detail or f"exit code {proc.returncode}")
             else:
                 entry["completed"] = True
+                outcome = "delivered"
         except (OSError, subprocess.TimeoutExpired) as exc:
             if proc:
                 from .term import terminate_process
@@ -563,6 +614,14 @@ class Handler(BaseHTTPRequestHandler):
                 terminate_process(proc)
             self.pending.fail(agent_id, entry, str(exc)[:300])
         finally:
+            if entry.get("transfer"):
+                from . import transfers
+                import logging
+
+                try:
+                    transfers.finish(self.scanner, entry["transfer"], outcome)
+                except (OSError, ValueError):
+                    logging.exception("Could not persist transfer outcome")
             with self.server.delivery_lock:
                 self.server.delivering.discard(agent_id)
                 if proc:
@@ -732,6 +791,10 @@ class PerchServer(ThreadingHTTPServer):
 
 
 def serve(scanner, terms, port=0, demo=False):
+    if not demo:
+        from . import transfers
+
+        transfers.recover(scanner)
     hub = EventHub()
     pending = Pending()
     # First scan is asynchronous, so large directories do not block the first window.

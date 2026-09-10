@@ -19,7 +19,9 @@ Static values deliberately configured in an MCP definition, including headers an
 
 Plugins can contain platform-specific code, commands, environment assumptions, and approval rules. Copying their installation directories across harnesses is not a supported interchange format. Current sharing covers explicit skills and MCP configuration; plugin installations, hooks, agent definitions, and sign-in state remain harness-owned.
 
-Planned plugin adapters will inventory those components, map compatible skills and tool definitions into destination formats, retain source provenance, and identify host-specific features. Context delivery will use the saved recording snapshots with destination-specific import or attachment routes. These adapters and automatic delivery are not implemented yet; see [RFC #2](https://github.com/soyr-redhat/perch/issues/2).
+The resource inventory reads Claude's installed-plugin index and Codex's plugin caches. Cache entries are labelled cached because a cache directory does not establish active installation or enablement. It identifies skills, MCP definitions, apps, hooks, agents, commands, and LSP components. Selected skill and MCP connections use the existing sharing engine; package installation and host-specific components are not converted. Plugin-relative MCP paths are resolved within the plugin directory, and malformed manifests produce individual discovery errors. omp package/plugin discovery is not implemented yet.
+
+Context transfers preserve the source snapshot and send a reference into a compatible recorded destination using its message adapter. Preparation does not run a harness. Sending explicitly starts a destination turn; it is not native role-history import. Receipts prevent repeat delivery of the same transfer ID, reject busy destinations, and preserve uncertain outcomes after interruptions. Real authenticated harness acceptance, native forks/imports, range/multi-source transfers, and external app dragging remain tracked in [RFC #2](https://github.com/soyr-redhat/perch/issues/2).
 
 ## References checked during implementation
 

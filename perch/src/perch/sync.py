@@ -138,9 +138,17 @@ def skill_inventory(roots=None) -> list:
     return sorted(skills.values(), key=lambda x: x["name"].casefold())
 
 
-def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False) -> dict:
+def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None, names=None) -> dict:
     roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
     inventory = skill_inventory(roots)
+    for name, source in (extra or {}).items():
+        item = next((item for item in inventory if item["name"] == name), None)
+        if item is None:
+            item = {"name": name, "origins": {}, "presentIn": []}
+            inventory.append(item)
+        item["origins"]["plugin"] = str(Path(source).resolve())
+    if names is not None:
+        inventory = [item for item in inventory if item["name"] in names]
     report = {"linked": [], "registered": [], "present": [], "conflicts": [], "errors": [], "total": len(inventory)}
     try:
         manifest = _load_manifest()
@@ -338,15 +346,18 @@ def _backup(path):
         atomic_write(backup, p.read_bytes().decode("utf-8"))
 
 
-def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False) -> dict:
+def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, extra=None, names=None) -> dict:
     registry_path = _mcp_registry(paths)
     paths = _paths(paths)
     report = {"found": 0, "sources": {}, "registered": [], "added": {}, "conflicts": [], "blocked": [], "errors": []}
     loaded, union, ambiguous, unavailable = {}, {}, set(), set()
-    for source, path in paths.items():
+    inputs = [(source, path) for source, path in paths.items()]
+    if extra:
+        inputs.append(("plugin", None))
+    for source, path in inputs:
         # Custom fixture callers can omit desktop without accessing real desktop configuration.
         try:
-            raw, doc, servers = _load(path, source == "codex")
+            raw, doc, servers = _load(path, source == "codex") if path else (b"", {}, extra)
             loaded[source] = (raw, doc, servers)
             report["sources"][source] = len(servers)
             for name, cfg in servers.items():
@@ -376,6 +387,9 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False) -> d
             ambiguous.add(name)
         else:
             union[name] = cfg
+    if names is not None:
+        union = {name: cfg for name, cfg in union.items() if name in names}
+        ambiguous.intersection_update(names)
     for name in sorted(ambiguous):
         report["conflicts"].append(
             {"server": name, "reason": "Different definitions; existing versions preserved"}

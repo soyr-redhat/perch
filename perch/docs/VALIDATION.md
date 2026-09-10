@@ -6,7 +6,7 @@ This audit covers the desktop workspace, release installers, and activity naviga
 
 Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check src/perch/static/app.js` from the `perch` project directory. Runtime tests use temporary configurations and a local fixture CLI that never contacts a model. The same tests run on macOS and Windows in GitHub Actions.
 
-`scripts/check_packaged.py <packaged-cli>` exercises the built executable, second-launch activation, authenticated backend, WebSocket input, a real terminal child, recorded output, headless replies, and terminal cleanup. This catches runtime failures that an import or `--version` check misses.
+`scripts/check_packaged.py <packaged-cli>` exercises the built executable, second-launch activation, authenticated backend, WebSocket input, a real terminal child, recorded output, headless replies, exports, resource inventory, context delivery, and terminal cleanup. This catches runtime failures that an import or `--version` check misses.
 
 | Area | Coverage |
 |---|---|
@@ -19,7 +19,9 @@ Run `python -m unittest discover -s tests -v`, `ruff check .`, and `node --check
 
 ## Interactive verification
 
-An isolated production-server fixture was operated through the UI. Verified: first/latest prompt navigation across 160 prompts; drafts across session changes; typing and focus during 20 snapshots at 10 Hz; terminal input/output; forced socket disconnect followed by reconnection to the same PID; search focus during terminal updates; stop confirmation and removal; sharing preview/apply and a second preview with no additions; settings persistence; theme changes.
+Before the integration pivot, an isolated production-server fixture was operated through the UI. Verified: first/latest prompt navigation across 160 prompts; drafts across session changes; typing and focus during 20 snapshots at 10 Hz; terminal input/output; forced socket disconnect followed by reconnection to the same PID; search focus during terminal updates; stop confirmation and removal; sharing preview/apply and a second preview with no additions; settings persistence; theme changes. The composer and its draft code have since been removed.
+
+The Resources-first interface was checked with isolated fixtures: selected plugin skill review/connect, a conversation reader without a composer, conversation-to-conversation dragging, explicit prepare/send, a completed transfer receipt, and one recorded context turn at the destination. The terminal runtime loads on demand and rendered fixture output. These browser checks do not establish native window behavior or real model consumption.
 
 A packaged macOS application was also operated in demo mode. Verified: application window, Workspace menu dispatch, native folder dialog and returned path, and copying handoff context then pasting it through the macOS Edit menu. Demo mode cannot write harness configurations or launch model sessions.
 
@@ -51,7 +53,8 @@ A packaged macOS application was also operated in demo mode. Verified: applicati
 ## Boundaries and remaining release checks
 
 - Conversation export tests cover complete source preservation, 200 long messages, unknown/malformed/oversized records, inline media, external-reference isolation, source mutation, failed archive cleanup, authenticated downloads, and the common desktop/CLI engine. Native Codex dispatch is tested with mocked macOS/Windows handlers; successful OS dispatch alone does not prove that a particular session is visible in the destination app.
-- Exports preserve one source file in record order. Cross-file history, active-branch reconstruction, automatic destination delivery, and drag-to-transfer are not implemented yet. External attachments are reported but not copied. Export folders are retained until removed by the user.
+- Exports preserve one source file in record order. Cross-file history, active-branch reconstruction, selected ranges, and external app dragging are not implemented yet. External attachments are reported but not copied. Export folders are retained until removed by the user.
+- Resource tests cover plugin discovery, malformed manifests, path confinement, secret-free inventories, selected component sharing, stale reviews, and desktop/CLI parity. Transfer tests cover preparation without execution, repeat sends, source deletion, busy destinations, receipt recovery, and fixture-harness delivery. Native CLI opening is tested through mocked macOS/Windows dispatch; real native windows and authenticated harness consumption still require acceptance checks.
 
 - Windows installer interaction, WebView2 integration, clipboard, and native dialogs need a Windows desktop acceptance run; CI process checks do not cover those GUI behaviors.
 - Windows development/build verification uses Python 3.12. Packaged users do not need to install Python. The compatible 2.x PTY runtime has slower reads than 3.x; Windows throughput/latency benchmarking remains outstanding.

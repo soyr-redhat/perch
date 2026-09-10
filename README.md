@@ -6,7 +6,7 @@
 
 Perch is a desktop integration layer for coding harnesses. Its purpose is to connect context, tools, plugins, and skills across the harnesses you use. Work happens in each harness’s own CLI or desktop app; Perch manages the connections between them.
 
-The intended workflow is to discover a resource once, make it available wherever compatible, and carry context between conversations without rebuilding the setup by hand. Conversation browsing supports those transfers. The existing chat composer and embedded terminal are transitional features, outside the intended primary workflow.
+The intended workflow is to discover a resource once, make it available wherever compatible, and carry context between conversations without rebuilding the setup by hand. Perch opens on Resources. Its conversation reader supports context selection and transfer; execution stays in the harness. An embedded terminal remains available as a compatibility fallback.
 
 ## Install
 
@@ -29,17 +29,22 @@ The macOS release targets Apple silicon. Gatekeeper may require confirmation unt
 The current source supports:
 
 - Discovering compatible skills and MCP server definitions across installed harnesses.
+- Reading Claude plugin installations and Codex plugin caches, including their skill, MCP, and host-specific components. Cached entries are labelled separately from installations.
 - Linking skills through a shared local registry and adding compatible MCP definitions to native harness configurations.
+- Reviewing and connecting individual skills and MCP components to selected harnesses through the same desktop and CLI engine.
 - Browsing recorded Claude Code, Codex, and omp conversations to inspect their context.
 - Exporting a complete recording file, transcript, and recognized inline attachments for use in another harness.
 - Opening recorded Codex sessions through a native desktop link; destination visibility still needs acceptance testing.
+- Opening recorded sessions in external macOS or Windows CLI windows, with platform dispatch covered by tests and native window acceptance still pending.
+- Preparing context by choosing a destination or dragging one conversation onto another, then explicitly sending it with a durable transfer receipt.
 
-Plugin discovery and compatibility mapping, direct context delivery, and drag-to-transfer are planned in [RFC #2](https://github.com/soyr-redhat/perch/issues/2). Exports are the first step toward context transfer; automatic cross-harness conversation merging is not implemented. Published installers may lag the source features described here.
+Transfers attach recorded context through a file reference that the destination harness must be able to read. They start a destination turn when sent; they do not import foreign history as native past turns. Multi-source transfers, selected message ranges, external app dragging, and additional plugin formats remain in [RFC #2](https://github.com/soyr-redhat/perch/issues/2). Published installers may lag the source features described here.
 
 `perch` opens the application. `perch-cli` provides the same command-line actions without Python:
 
 ```sh
 perch-cli --tools
+perch-cli --capabilities
 perch-cli --dry-run
 perch-cli --sync --targets claude codex omp
 perch-cli --sessions
@@ -54,7 +59,23 @@ Shared tool state lives alongside it:
 - `~/.perch/shared/skills/<name>` links each compatible skill to its detected source. Perch-managed harness skill directories link through this location, so an edit is immediately shared.
 - `~/.perch/shared/mcp/servers.json` stores portable MCP definitions. Perch writes compatible entries into each harness’s native configuration when you apply sharing.
 
-Existing user-managed links and configuration remain in place. Plugin installations, hooks, custom agents, and sign-in state currently stay with their own harnesses. Planned plugin adapters will expose compatible components to other harnesses and identify features that depend on the original host. Authentication and execution permissions remain with each harness.
+Existing user-managed links and configuration remain in place. Plugin packages, hooks, custom agents, and sign-in state stay with their own harnesses. Supported plugin skills and MCP definitions can be connected individually. Relative MCP paths are resolved within the plugin; unresolved environment variables and host-specific components require an adapter. Authentication and execution permissions remain with each harness.
+
+Review one connection with `perch-cli --link RESOURCE_ID --target codex`, using an ID from `--capabilities`. Apply that reviewed change with the same arguments plus `--apply --revision REVISION`. Changes to the source or existing configuration invalidate the review.
+
+### Context transfers
+
+Choose **Transfer…** in the conversation reader, or drag a conversation onto its destination. Preparing saves the source recording without running a harness. **Send context** starts a turn in the destination; busy destinations are rejected. **Last transfer** restores the most recent receipt after reloading the interface.
+
+The CLI provides the same flow:
+
+```sh
+perch-cli --transfer 'claude:SOURCE_ID' --to 'codex:TARGET_ID'
+perch-cli --send-transfer TRANSFER_UUID
+perch-cli --transfer-status TRANSFER_UUID
+```
+
+Sending from the CLI uses the running Perch app. Repeated sends of the same transfer ID do not start another turn. If delivery is interrupted or its outcome cannot be established, Perch records it as uncertain; check the destination before preparing another transfer. The receiving harness keeps its own permissions and may ask to read the saved context.
 
 ### Conversation exports
 
@@ -62,7 +83,7 @@ Select **Export…** in a session, or use `--export-session` with an ID from `--
 
 Each export includes the original recording, a transcript in source record order, `manifest.json` with source hashes and attachment availability, and a portable ZIP. It preserves the whole source file, including branches and tool events, without the activity view’s display limits. Malformed or unusually large records remain in the original source and are identified in the manifest. Inline images and documents are extracted where recognized; external file and URL references are listed without fetching them. Other session files and live runtime state are not included.
 
-Exporting does not send a message or merge project files. A local reference works only where the receiving harness can read that folder; use the ZIP when moving it elsewhere. Automated delivery and drag-to-transfer are tracked in [RFC #2](https://github.com/soyr-redhat/perch/issues/2).
+Exporting does not send a message or merge project files. A local reference works only where the receiving harness can read that folder; use the ZIP when moving it elsewhere.
 
 ## Repository layout
 

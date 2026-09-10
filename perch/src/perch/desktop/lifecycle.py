@@ -5,9 +5,46 @@ import json
 import os
 import subprocess
 import sys
+import shlex
 from pathlib import Path
 import urllib.request
 from ..storage import DATA_DIR, write_json
+
+
+def open_cli_session(scanner, agent_id):
+    """Resume a known recording in an external terminal owned by the harness."""
+    from uuid import uuid4
+    from ..term import external_process_env
+
+    agent = next((a for a in scanner.scan()["agents"] if a["id"] == agent_id), None)
+    adapter = agent and next((a for a in scanner.adapters if a.id == agent["harness"]), None)
+    if not adapter or not adapter.enabled or not adapter.resume:
+        raise ValueError("This session has no native CLI resume route")
+    argv = adapter.spawn_argv(agent_id.partition(":")[2])
+    if not argv:
+        raise ValueError("The harness CLI is unavailable")
+    cwd = agent.get("cwd") or str(Path.home())
+    if not Path(cwd).is_dir():
+        raise ValueError("The recorded project folder is unavailable")
+    if sys.platform == "darwin":
+        folder = Path(scanner.config_dir or DATA_DIR) / "launchers"
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        script = folder / (str(uuid4()) + ".command")
+        content = "#!/bin/sh\n" + "rm -f -- " + shlex.quote(str(script)) + "\n"
+        content += "export PATH=" + shlex.quote(os.environ.get("PATH", "/usr/bin:/bin")) + "\n"
+        content += "cd -- " + shlex.quote(cwd) + " || exit 1\nexec " + shlex.join(argv) + "\n"
+        script.write_text(content, encoding="utf-8")
+        script.chmod(0o700)
+        try:
+            _mac_open("-a", "Terminal", str(script))
+        except OSError:
+            script.unlink(missing_ok=True)
+            raise
+    elif sys.platform == "win32":
+        with external_process_env() as env:
+            subprocess.Popen(argv, cwd=cwd, env=env, creationflags=0x00000010)
+    else:
+        raise ValueError("Native CLI opening is supported on macOS and Windows")
 
 
 def _mac_open(*args):

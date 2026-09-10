@@ -26,6 +26,19 @@ def run_app(url, httpd):
     httpd.native_bridge = True
 
     class Bridge:
+        def open_cli(self, agent_id):
+            from .desktop.lifecycle import open_cli_session
+
+            try:
+                if httpd.demo:
+                    raise ValueError("Demo mode is read-only")
+                if agent_id in httpd.delivering or any(t.get("session") == agent_id.partition(":")[2] and t["alive"] for t in httpd.terms.list()):
+                    raise ValueError("This session is busy in Perch")
+                open_cli_session(httpd.scanner, agent_id)
+                return {"ok": True}
+            except (OSError, ValueError) as exc:
+                return {"error": str(exc)}
+
         def show_export(self, snapshot_id):
             from .conversations import archive_path
             from .desktop.lifecycle import show_export
@@ -89,7 +102,7 @@ def run_app(url, httpd):
             "Workspace",
             [
                 MenuAction("New session", lambda: action("newSession")),
-                MenuAction("Shared tools", lambda: action("sharedTools")),
+                MenuAction("Resources", lambda: action("sharedTools")),
                 MenuSeparator(),
                 MenuAction("Settings", lambda: action("settings")),
                 MenuSeparator(),
@@ -127,10 +140,20 @@ def parser():
     p.add_argument("--sync", action="store_true", help="Apply compatible skill and MCP additions and exit")
     p.add_argument("--dry-run", action="store_true", help="Preview sharing without changing harness files")
     p.add_argument("--tools", action="store_true", help="Show shared tool inventory as JSON and exit")
+    p.add_argument("--capabilities", action="store_true", help="List resources, plugin components, and compatibility as JSON")
+    p.add_argument("--link", metavar="RESOURCE_ID", help="Review a resource connection; use --apply with --revision to apply")
+    p.add_argument("--target", choices=settings.TARGETS, help="Destination for --link")
+    p.add_argument("--apply", action="store_true", help="Apply the reviewed connection")
+    p.add_argument("--revision", help="Revision returned by --link")
     p.add_argument("--targets", nargs="+", choices=settings.TARGETS, help="Harnesses to receive shared tools")
     p.add_argument("--demo", action="store_true", help="Read-only synthetic sessions for UI evaluation")
     p.add_argument("--sessions", action="store_true", help="List detected session IDs as JSON and exit")
     p.add_argument("--export-session", metavar="HARNESS:ID", help="Save a complete recorded session and exit")
+    p.add_argument("--transfer", metavar="SOURCE_ID", help="Prepare context for another recorded conversation")
+    p.add_argument("--to", metavar="TARGET_ID", help="Destination conversation for --transfer")
+    p.add_argument("--transfer-id", help="Optional UUID for repeatable preparation")
+    p.add_argument("--send-transfer", metavar="UUID", help="Send prepared context through the running app; starts a harness turn")
+    p.add_argument("--transfer-status", metavar="UUID", help="Read a saved transfer receipt")
     p.add_argument("--version", action="version", version="Perch 0.2.0")
     return p
 
@@ -143,6 +166,34 @@ def main():
     args = parser().parse_args()
     extend_path()
     cfg = settings.load()
+    if args.transfer or args.send_transfer or args.transfer_status:
+        from . import transfers
+        from uuid import uuid4
+
+        scanner = Scanner(config_dir=str(DATA_DIR))
+        scanner.apply_settings(cfg)
+        try:
+            if args.transfer:
+                result = transfers.prepare(scanner, args.transfer, args.to, args.transfer_id or str(uuid4()))
+            elif args.send_transfer:
+                result = transfers.send_to_app(scanner, args.send_transfer)
+            else:
+                result = transfers.read(scanner, args.transfer_status)
+        except (OSError, ValueError, TypeError) as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return int(result.get("status") in ("failed", "uncertain"))
+    if args.capabilities or args.link:
+        from . import capabilities
+
+        try:
+            result = capabilities.inventory() if args.capabilities else capabilities.link(args.link, args.target, revision=args.revision, apply=args.apply)
+        except (OSError, ValueError, TypeError) as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return int(result.get("status") == "blocked" or bool(result.get("errors")))
     if args.sync or args.dry_run or args.tools:
         from .sync import overview, sync_all
 

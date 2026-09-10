@@ -5,9 +5,9 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&
 const folder = (p) => p?.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'Other sessions';
 const activityLabel = s => ({working:'Active',waiting:'Idle',quiet:'Recent'}[s]||'Status unavailable');
 const names = {claude:'Claude Code',codex:'Codex',omp:'omp','claude-desktop':'Claude Desktop','codex-legacy':'Codex (legacy)'};
-const state = {snap:null, selected:localStorage.getItem('perch.selected'), filter:'all', search:'', page:'sessions',
-  tab:'activity', terms:new Map(), drafts:new Map(), feedKey:'', sidebarKey:'', tabsKey:'', history:null, historyRequest:0, promptNav:null,
-  tools:null, toolTab:'skills', cfg:null, connected:false, sending:new Set(), follow:true};
+const state = {snap:null, selected:localStorage.getItem('perch.selected'), filter:'all', search:'', page:'tools',
+  tab:'activity', terms:new Map(), feedKey:'', sidebarKey:'', tabsKey:'', history:null, historyRequest:0, promptNav:null,
+  tools:null, toolTab:'all', resourceSearch:'', cfg:null, connected:false, follow:true};
 let events, toastTimer;
 function ago(ts) {
   const seconds = Math.max(0, (Date.now() - (typeof ts === 'number' ? ts*1000 : Date.parse(ts))) / 1000);
@@ -50,13 +50,14 @@ function apply(snap) {
   if(!snap.agents.some(a=>a.id===state.selected)) state.selected=snap.agents[0]?.id||null;
   for(const [id,t] of state.terms) if(!snap.terms.some(x=>x.id===id)){state.terms.delete(id);clearTimeout(t.retryTimer);t.ws?.close();t.term.dispose();t.el.remove();if(state.tab===id)state.tab='activity';}
   $('#health').hidden=!snap.errors?.length;
-  $('#health').textContent=(snap.errors||[]).map(e=>`${e.harness?names[e.harness]+': ':''}${e.message}`).join(' · ');
+  $('#health').textContent=(snap.errors||[]).map(e=>`${e.harness?(names[e.harness]||harness(e.harness).name)+': ':''}${e.message}`).join(' · ');
   $('#watching').textContent=snap.loading?'Discovering local sessions…':`${snap.agents.length} sessions across ${snap.watching?.length||0} harnesses`;
   if(snap.demo) $('#mode-label').textContent='Demo · synthetic sessions';
   renderSidebar(); if(state.page==='sessions') renderSession();
 }
 async function boot() {
   try {apply(await api('/api/snapshot'));}catch(e){toast(e.message,true);}
+  if(state.page==='tools')await openTools();
   events?.close(); events=new EventSource('/api/events');
   events.onopen=()=>connection(true);events.onerror=()=>connection(false);
   events.onmessage=e=>{try{apply(JSON.parse(e.data));}catch(err){toast('Could not read the session update',true);}};
@@ -72,26 +73,29 @@ function renderSidebar() {
   const fragment=document.createDocumentFragment();
   for(const [cwd,items] of groups){
     const heading=document.createElement('div');heading.className='project-group';heading.innerHTML=`<span aria-hidden="true">▱</span> ${esc(folder(cwd))}<span>${items.length}</span>`;heading.title=cwd;fragment.append(heading);
-    for(const a of items){let row=existing.get(a.id)||document.createElement('button');row.className='session-row';row.dataset.agent=a.id;row.setAttribute('aria-current',String(a.id===state.selected&&state.page==='sessions'));row.title=a.title;
+    for(const a of items){let row=existing.get(a.id)||document.createElement('button');row.className='session-row';row.dataset.agent=a.id;row.draggable=true;row.setAttribute('aria-current',String(a.id===state.selected&&state.page==='sessions'));row.title=a.title;
       const html=`<div class="row-top"><span class="status-dot ${esc(a.state)}" aria-label="${esc(activityLabel(a.state))}"></span><span class="row-title">${esc(a.title)}</span></div><div class="row-bottom"><span class="harness-mark">${esc(harness(a.harness,a.harness_name).name)}</span><span>${esc(activityLabel(a.state))}</span><span class="time" data-time="${esc(a.updated||a.mtime)}">${ago(a.updated||a.mtime)}</span></div>`;
       if(row.dataset.content!==html){row.innerHTML=html;row.dataset.content=html;}fragment.append(row);
     }
   }
   const focus=document.activeElement?.dataset.agent;const scroll=list.scrollTop;
-  if(!agents.length){const empty=document.createElement('div');empty.className='empty-list';empty.textContent=state.search?'No matching sessions. Try a project or harness name.':'No sessions here yet. Start an agent to get going.';fragment.append(empty);}
+  if(!agents.length){const empty=document.createElement('div');empty.className='empty-list';empty.textContent=state.search?'No matching sessions. Try a project or harness name.':'No recorded conversations found.';fragment.append(empty);}
   list.replaceChildren(fragment);list.scrollTop=scroll;
   if(focus) [...list.querySelectorAll('[data-agent]')].find(x=>x.dataset.agent===focus)?.focus({preventScroll:true});
 }
 function selectAgent(id) {
-  if(state.selected)state.drafts.set(state.selected,$('#reply').value);
   state.historyRequest++;state.promptNav=null;$('#feed').removeAttribute('aria-busy');
   state.selected=id;localStorage.setItem('perch.selected',id);state.page='sessions';state.tab='activity';state.history=null;state.feedKey='';state.follow=true;
-  $('#reply').value=state.drafts.get(id)||'';showPage();renderSidebar();renderSession();
+  showPage();renderSidebar();renderSession();
 }
 function showPage() {
+  const resources=state.page==='tools';
+  $('#resources-nav').classList.toggle('active',resources);$('#conversations-nav').classList.toggle('active',!resources);
+  $('.search').hidden=resources;$('.filters').hidden=resources;$('#sessions').hidden=resources;$('#new-session').hidden=resources;
+  $('.sidebar-nav').style.marginTop=resources?'auto':'';
   $('#session-view').hidden=state.page!=='sessions';$('#tools-view').hidden=state.page!=='tools';
-  $('#tools-nav').classList.toggle('active',state.page==='tools');$('#view-label').textContent=state.page==='tools'?'Shared tools':'Sessions';
-  if(state.page==='tools') $('#project-label').textContent='Skills & MCP';
+  $('#view-label').textContent=state.page==='tools'?'Resources':'Conversations';
+  if(state.page==='tools') $('#project-label').textContent='Connections';
 }
 function renderSession() {
   if(!state.snap)return;
@@ -101,16 +105,14 @@ function renderSession() {
   $('#session-meta').innerHTML=a?`<span><i class="status-dot ${esc(a.state)}"></i>${esc(activityLabel(a.state))}</span>${a.model?`<span>${esc(a.model)}</span>`:''}${a.tokens?`<span>${new Intl.NumberFormat('en',{notation:'compact'}).format(a.tokens)} tokens</span>`:''}<span title="${esc(a.cwd)}">${esc(a.cwd||'No project folder')}</span>`:'';
   const h=a&&harness(a.harness,a.harness_name);
   const nativeCodex=a?.harness==='codex'&&Boolean(window.pywebview?.api);
-  const actionKey=JSON.stringify([a?.id,h?.canResume,nativeCodex]);
-  if($('#session-actions').dataset.key!==actionKey){$('#session-actions').dataset.key=actionKey;$('#session-actions').innerHTML=a?`${nativeCodex?'<button id="open-native-session">Open in Codex</button>':''}${h.canResume?'<button id="resume-session">Open terminal</button>':''}<button id="handoff-session">Export…</button>`:'';}
+  const actionKey=JSON.stringify([a?.id,h?.canResume,nativeCodex,Boolean(window.pywebview?.api)]);
+  if($('#session-actions').dataset.key!==actionKey){$('#session-actions').dataset.key=actionKey;$('#session-actions').innerHTML=a?`${nativeCodex?'<button id="open-native-session">Open in Codex</button>':''}${h.canResume?(window.pywebview?.api?'<button id="open-cli-session">Open CLI</button>':'<button id="resume-session">Open terminal</button>'):''}<button id="transfer-session">Transfer…</button><button id="handoff-session">Export…</button>`:'';}
   const tabsKey=JSON.stringify([state.snap.terms.map(t=>[t.id,t.name,t.alive]),state.tab]);
   if(tabsKey!==state.tabsKey){state.tabsKey=tabsKey;$('#view-tabs').innerHTML=`<button role="tab" data-tab="activity" aria-selected="${state.tab==='activity'}">Activity</button>`+state.snap.terms.map(t=>`<span class="terminal-tab"><button role="tab" data-tab="${esc(t.id)}" aria-selected="${state.tab===t.id}">▣ ${esc(t.name)}${t.alive?'':' · exited'}</button><button class="close-term" data-close-term="${esc(t.id)}" aria-label="Close ${esc(t.name)} terminal">×</button></span>`).join('');}
   $('#activity-view').hidden=state.tab!=='activity';$('#terminal-view').hidden=state.tab==='activity';
   if(state.tab!=='activity'){showTerm(state.tab);return;}
   state.activeTerminal=null;
-  $('#history-toolbar').hidden=!a;$('#history-rail').hidden=!a;$('#composer').hidden=!a||!h.canMessage;
-  $('#send').disabled=!a||state.sending.has(a.id);$('#reply-hint').textContent=a?`Message ${h.name} · ${navigator.platform.includes('Mac')?'⌘':'Ctrl'} Enter`:'⌘ Enter to send';
-  if($('#reply').dataset.agent!==a?.id){$('#reply').value=state.drafts.get(a?.id)||'';$('#reply').dataset.agent=a?.id||'';}
+  $('#history-toolbar').hidden=!a;$('#history-rail').hidden=!a;
   if(!a){state.feedKey='';$('#feed').innerHTML='<div class="welcome"><h2>No sessions yet</h2></div>';return;}
   const hist=state.history?.agent===a.id?state.history:null;
   const total=Math.max(hist?.of||0,(a.prompts.at(-1)?.index??-1)+1);
@@ -192,12 +194,6 @@ async function loadHistory(index) {
   } catch(e) {if(state.selected===id&&request===state.historyRequest)throw e;}
   finally {if(request===state.historyRequest){$('#feed').removeAttribute('aria-busy');renderSession();}}
 }
-async function sendMessage(e) {
-  e.preventDefault();const a=selected(),text=$('#reply').value.trim();if(!a||!text||state.sending.has(a.id))return;
-  state.sending.add(a.id);$('#send').disabled=true;
-  try{await api('/api/message',{agent:a.id,text});if(state.drafts.get(a.id)?.trim()===text)state.drafts.delete(a.id);if(state.selected===a.id&&$('#reply').value.trim()===text)$('#reply').value='';toast('Message started');}
-  finally{state.sending.delete(a.id);if(state.selected===a.id)$('#send').disabled=false;}
-}
 function connectTerm(id,t) {
   if(state.terms.get(id)!==t||t.ended)return;
   const ws=new WebSocket(`ws://${location.host}/ws/term/${id}`);ws.binaryType='arraybuffer';t.ws=ws;
@@ -210,7 +206,21 @@ function connectTerm(id,t) {
   ws.onerror=()=>status('Reconnecting terminal…');
   ws.onclose=()=>{if(state.terms.get(id)!==t||t.ws!==ws||t.ended)return;status('Reconnecting terminal…');t.retryTimer=setTimeout(()=>connectTerm(id,t),Math.min(5000,500*2**Math.min(t.attempts++,4)));};
 }
-function showTerm(id) {
+let terminalRuntime;
+async function loadTerminalRuntime() {
+  if(window.Terminal&&window.FitAddon)return;
+  if(!terminalRuntime)terminalRuntime=(async()=>{
+    if(!document.querySelector('#terminal-style')){const css=document.createElement('link');css.id='terminal-style';css.rel='stylesheet';css.href='/xterm.min.css';document.head.append(css);}
+    for(const [name,src] of [['Terminal','/xterm.min.js'],['FitAddon','/xterm-addon-fit.min.js']]){
+      if(window[name])continue;
+      await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=src;script.onload=resolve;script.onerror=()=>{script.remove();reject(new Error('Could not load the terminal. Open it again to retry.'));};document.head.append(script);});
+    }
+  })().catch(error=>{terminalRuntime=null;throw error;});
+  return terminalRuntime;
+}
+async function showTerm(id) {
+  try{await loadTerminalRuntime();}catch(e){$('#terminal-status').textContent=e.message;return;}
+  if(state.tab!==id||state.page!=='sessions')return;
   const info=state.snap.terms.find(t=>t.id===id);if(!info)return;
   let t=state.terms.get(id);
   if(!t){
@@ -250,13 +260,40 @@ async function handoff() {
     if($('#show-export'))$('#show-export').onclick=async()=>{try{const reply=await window.pywebview.api.show_export(result.id);if(reply.error)report(reply.error);}catch(error){report(error.message);}};
   } finally {button.disabled=false;}
 }
-async function openTools() {state.page='tools';showPage();renderSidebar();$('#tools-table').innerHTML='<p class="empty-list">Reading local tool configurations…</p>';state.tools=await api('/api/tools');renderTools();}
+function transferConversation(source,target) {
+  const a=state.snap.agents.find(a=>a.id===source);if(!a)return;
+  const options=state.snap.agents.filter(a=>a.id!==source&&harness(a.harness,a.harness_name).canMessage);
+  dialog('Transfer context',`<p>From ${esc(a.title)} (${esc(harness(a.harness,a.harness_name).name)})</p>${options.length?`<label class="field">Destination<select id="transfer-target">${options.map(a=>`<option value="${esc(a.id)}" ${a.id===target?'selected':''}>${esc(a.title)} · ${esc(harness(a.harness,a.harness_name).name)}</option>`).join('')}</select></label>`:'<p>No compatible destination conversations found. Open one in a harness first.</p>'}<p id="transfer-status" role="status"></p>`,`<button data-dismiss>Close</button>${localStorage.getItem('perch.lastTransfer')?'<button id="last-transfer">Last transfer</button>':''}${options.length?'<button class="primary" id="prepare-transfer">Prepare context</button>':''}`);
+  if($('#last-transfer'))$('#last-transfer').onclick=guard(async()=>showTransfer(await api('/api/transfers/'+localStorage.getItem('perch.lastTransfer'))));
+  if($('#prepare-transfer'))$('#prepare-transfer').onclick=async()=>{const button=$('#prepare-transfer');button.disabled=true;const id=crypto.randomUUID();localStorage.setItem('perch.lastTransfer',id);try{showTransfer(await api('/api/transfers/prepare',{source,target:$('#transfer-target').value,id}));}catch(e){$('#transfer-status').textContent=e.message;button.disabled=false;}};
+}
+function showTransfer(receipt) {
+  const labels={prepared:'Context prepared.',running:'The destination is processing the context.',delivered:'The destination completed the context turn.',failed:'Delivery did not start. Prepare a new transfer to try again.',uncertain:'Delivery may have started. Check the destination before preparing another transfer.'};
+  const title=id=>state.snap.agents.find(a=>a.id===id)?.title||id;
+  const missing=receipt.attachments.filter(a=>a.status!=='included').length;
+  dialog('Transfer context',`<p>${esc(title(receipt.source))} → ${esc(title(receipt.target))}</p><p id="transfer-status" role="status">${esc(labels[receipt.status]||receipt.status)}</p>${missing||receipt.warnings.length?'<p>Some content is available only in the original recording or remains an external reference. See the export manifest.</p>':''}<label class="field">Saved context<input readonly value="${esc(receipt.transcript)}"></label>${receipt.status==='prepared'?'<p>Send context starts a turn in the destination harness. Project files are not merged.</p>':''}`,`<button data-dismiss>Close</button><button id="refresh-transfer">Refresh status</button>${receipt.status==='prepared'?'<button class="primary" id="send-transfer">Send context</button>':''}`);
+  $('#refresh-transfer').onclick=guard(async()=>showTransfer(await api('/api/transfers/'+receipt.id)));
+  if($('#send-transfer'))$('#send-transfer').onclick=async()=>{const button=$('#send-transfer');button.disabled=true;try{await api('/api/transfers/send',{id:receipt.id});showTransfer(await api('/api/transfers/'+receipt.id));}catch(e){$('#transfer-status').textContent=e.message;button.disabled=false;}};
+}
+async function openTools() {
+  state.page='tools';showPage();renderSidebar();
+  if(!state.tools)$('#tools-table').innerHTML='<p class="empty-list">Reading resources…</p>';
+  state.tools=await api('/api/capabilities');renderTools();
+}
 function renderTools() {
-  if(!state.tools)return;const {skills,mcp,targets}=state.tools;
-  $('#skill-count').textContent=skills.length;$('#mcp-count').textContent=mcp.length;$('#tools-count').textContent=skills.length+mcp.length;
-  const data=state.toolTab==='skills'?skills:mcp;
-  const columns=targets.filter(t=>state.toolTab!=='skills'||t.skills);
-  $('#tools-table').innerHTML=data.length?`<table><thead><tr><th>${state.toolTab==='skills'?'Skill':'MCP server'}</th>${columns.map(t=>`<th>${esc(t.name)}</th>`).join('')}</tr></thead><tbody>${data.map(item=>`<tr><td>${esc(item.name)}<small>${state.toolTab==='skills'?'':item.transport.toLowerCase()==='stdio'?'Local':'Remote'}</small></td>${columns.map(t=>{const disabled=item.disabledIn?.includes(t.id);const present=item.presentIn.includes(t.id);return `<td><span class="presence ${disabled?'disabled':present?'':'missing'}">${disabled?'Paused':present?'✓ Available':'— Not shared'}</span></td>`;}).join('')}</tr>`).join('')}</tbody></table>`:'<div class="empty-list">No '+(state.toolTab==='skills'?'skills':'MCP servers')+' found.</div>';
+  if(!state.tools)return;
+  const {resources,targets,errors}=state.tools;
+  $('#tools-count').textContent=resources.length;
+  $('#resource-errors').hidden=!errors.length;$('#resource-errors').textContent=errors.map(e=>`${e.source}: ${e.reason}`).join(' · ');
+  const labels={present:'Present',available:'Link',review:'Review',blocked:'Blocked',unsupported:'Unavailable',disabled:'Disabled',components:'Components'};
+  const data=resources.filter(r=>(state.toolTab==='all'||r.kind===state.toolTab)&&`${r.name} ${r.kind} ${Object.keys(r.origins).join(' ')}`.toLowerCase().includes(state.resourceSearch));
+  $('#tools-table').innerHTML=data.length?`<table><thead><tr><th>Resource</th><th>Source</th>${targets.map(t=>`<th>${esc(t.name)}</th>`).join('')}</tr></thead><tbody>${data.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${esc(r.kind)}${r.plugin?' · plugin component':''}</small></td><td>${Object.keys(r.origins).map(h=>esc(names[h]||h)).join(', ')}<small>${esc(r.discovery)}</small></td>${targets.map(t=>{const c=r.compatibility[t.id];return `<td>${['review','available'].includes(c.status)?`<button data-resource="${esc(r.id)}" data-destination="${esc(t.id)}">${labels[c.status]}</button>`:`<span class="presence ${c.status==='present'?'':'missing'}" title="${esc(c.reason)}">${esc(labels[c.status]||c.status)}</span>`}</td>`;}).join('')}</tr>`).join('')}</tbody></table>`:'<p class="empty-list">No matching resources.</p>';
+}
+async function reviewConnection(id,target) {
+  const resource=state.tools.resources.find(r=>r.id===id);
+  const plan=await api('/api/capabilities/link',{id,target});
+  dialog(`Connect ${resource.name}`,`<p>${esc(names[target]||target)}</p><label class="field">Source<input readonly value="${esc(Object.values(resource.origins).filter(Boolean).join(', '))}"></label><p id="link-status" role="status">${esc(plan.reason||'Add this resource without replacing existing configuration.')}</p>`,`<button data-dismiss>Close</button>${plan.status!=='blocked'?'<button class="primary" id="apply-connection">Connect</button>':''}`);
+  if($('#apply-connection'))$('#apply-connection').onclick=async()=>{const button=$('#apply-connection');button.disabled=true;try{const result=await api('/api/capabilities/link',{id,target,revision:plan.revision,apply:true});$('#link-status').textContent=result.applied?'Connected.':result.reason;button.hidden=result.applied;await openTools();}catch(e){$('#link-status').textContent=e.message;}finally{button.disabled=false;}};
 }
 async function previewSync() {
   const result=await api('/api/sync',{preview:true});showPlan(result);
@@ -265,24 +302,26 @@ function showPlan(r) {
   const additions=[...(r.skills.linked||[]).map(x=>`${x.skill} → ${names[x.into]||x.into}`),...Object.entries(r.mcp.added||{}).flatMap(([target,items])=>items.map(x=>`${x} → ${names[target]||target}`))];
   const issues=[...(r.skills.conflicts||[]),...(r.skills.errors||[]),...(r.mcp.conflicts||[]),...(r.mcp.blocked||[]),...(r.mcp.errors||[])];
   dialog(r.dryRun?'Review sharing changes':'Sharing complete',`${additions.length?`<ul class="plan-list plan-success">${additions.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'<p>Nothing to share.</p>'}${issues.length?`<p><strong>Needs attention</strong></p><ul class="plan-list plan-issue">${issues.map(x=>`<li>${esc(x.skill||x.server||x.source||'Configuration')}: ${esc(x.reason||'Conflicting source')}</li>`).join('')}</ul>`:''}`,'<button data-dismiss>Close</button>'+(r.dryRun&&additions.length?'<button class="primary" id="apply-sync">Apply additions</button>':''));
-  if($('#apply-sync'))$('#apply-sync').onclick=guard(async()=>{const button=$('#apply-sync');button.disabled=true;try{const applied=await api('/api/sync',{preview:false,revision:r.revision});showPlan(applied);if(state.page==='tools'){state.tools=await api('/api/tools');renderTools();}}finally{button.disabled=false;}});
+  if($('#apply-sync'))$('#apply-sync').onclick=guard(async()=>{const button=$('#apply-sync');button.disabled=true;try{const applied=await api('/api/sync',{preview:false,revision:r.revision});showPlan(applied);if(state.page==='tools'){state.tools=await api('/api/capabilities');renderTools();}}finally{button.disabled=false;}});
 }
 async function settings() {
   const data=await api('/api/settings');state.cfg=data.settings;const cfg=state.cfg;
   dialog('Workspace settings',`<label class="field">Appearance<select id="setting-theme">${['system','light','dark'].map(t=>`<option value="${t}" ${cfg.appearance?.theme===t?'selected':''}>${t[0].toUpperCase()+t.slice(1)}</option>`).join('')}</select></label><label class="field">Keep recent sessions for (days)<input id="setting-days" type="number" min="0.1" max="90" step="0.1" value="${cfg.watching.quietDays}"></label><p><strong>Watch harnesses</strong></p>${data.harnesses.map(h=>`<label class="choice-row"><span>${esc(h.name)}<small>${h.installed?'Installed':'Not installed'}</small></span><input type="checkbox" data-harness="${esc(h.id)}" ${h.enabled?'checked':''}></label>`).join('')}<p><strong>Share with</strong></p>${Object.entries(names).filter(([id])=>id!=='codex-legacy').map(([id,name])=>`<label class="choice-row"><span>${esc(name)}${id==='claude-desktop'?'<small>Local stdio MCP servers only</small>':''}</span><input type="checkbox" data-target="${id}" ${cfg.sharing.targets.includes(id)?'checked':''}></label>`).join('')}<label class="choice-row">Share skills<input type="checkbox" id="setting-skills" ${cfg.sharing.skills?'checked':''}></label><label class="choice-row">Share MCP servers<input type="checkbox" id="setting-mcp" ${cfg.sharing.mcp?'checked':''}></label><label class="choice-row"><span>Automatic sharing<small>Share new tools automatically</small></span><input type="checkbox" id="setting-auto" ${cfg.sharing.autoSync?'checked':''}></label>`,'<button data-dismiss>Cancel</button><button class="primary" id="save-settings">Save settings</button>');
   $('#save-settings').onclick=guard(async()=>{const days=Number($('#setting-days').value);if(!Number.isFinite(days)||days<.1||days>90)throw new Error('Choose between 0.1 and 90 days');const body={watching:{quietDays:days},appearance:{theme:$('#setting-theme').value},harnesses:{disabled:[...document.querySelectorAll('[data-harness]')].filter(x=>!x.checked).map(x=>x.dataset.harness)},sharing:{skills:$('#setting-skills').checked,mcp:$('#setting-mcp').checked,autoSync:$('#setting-auto').checked,targets:[...document.querySelectorAll('[data-target]')].filter(x=>x.checked).map(x=>x.dataset.target)}};state.cfg=(await api('/api/settings',body)).settings;setTheme(state.cfg.appearance.theme);$('#dialog').close();toast('Settings saved');});
 }
+$('#sessions').ondragstart=e=>{const row=e.target.closest('[data-agent]');if(row){e.dataTransfer.setData('application/x-perch-session',row.dataset.agent);e.dataTransfer.effectAllowed='copy';}};
+$('#sessions').ondragover=e=>{if(e.target.closest('[data-agent]')&&e.dataTransfer.types.includes('application/x-perch-session')){e.preventDefault();e.dataTransfer.dropEffect='copy';}};
+$('#sessions').ondrop=e=>{const row=e.target.closest('[data-agent]'),source=e.dataTransfer.getData('application/x-perch-session');if(row&&source){e.preventDefault();if(source!==row.dataset.agent)transferConversation(source,row.dataset.agent);}};
 $('#sessions').onclick=e=>{const row=e.target.closest('[data-agent]');if(row)selectAgent(row.dataset.agent);};
 $('.filters').onclick=e=>{const button=e.target.closest('[data-filter]');if(!button)return;state.filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',String(x===button)));renderSidebar();};
 $('#search').oninput=e=>{state.search=e.target.value.toLowerCase();renderSidebar();};
 $('#new-session').onclick=newSession;$('#welcome-new').onclick=newSession;$('#welcome-tools').onclick=guard(openTools);
-$('#tools-nav').onclick=guard(openTools);$('#settings-nav').onclick=guard(settings);$('#retry').onclick=guard(boot);
+$('#resources-nav').onclick=guard(openTools);$('#conversations-nav').onclick=()=>{state.page='sessions';showPage();renderSidebar();renderSession();};
+$('#resource-search').oninput=e=>{state.resourceSearch=e.target.value.toLowerCase();renderTools();};$('#tools-table').onclick=guard(async e=>{const button=e.target.closest('[data-resource]');if(button)await reviewConnection(button.dataset.resource,button.dataset.destination);});$('#settings-nav').onclick=guard(settings);$('#retry').onclick=guard(boot);
 $('#theme').onclick=guard(async()=>{const mode=document.documentElement.dataset.theme==='dark'?'light':'dark';setTheme(mode);if(state.snap?.demo)return;await api('/api/settings',{appearance:{theme:mode}});});
-$('#session-actions').onclick=guard(async e=>{if(e.target.id==='resume-session'){const a=selected();await spawn(a.harness,a.cwd,a.id.split(':').slice(1).join(':'));}if(e.target.id==='handoff-session')await handoff();if(e.target.id==='open-native-session'){const reply=await window.pywebview.api.open_session(selected().id);if(reply.error)throw new Error(reply.error);}});
+$('#session-actions').onclick=guard(async e=>{if(e.target.id==='resume-session'){const a=selected();await spawn(a.harness,a.cwd,a.id.split(':').slice(1).join(':'));}if(e.target.id==='handoff-session')await handoff();if(e.target.id==='transfer-session')transferConversation(selected().id);if(e.target.id==='open-cli-session'){const reply=await window.pywebview.api.open_cli(selected().id);if(reply.error)throw new Error(reply.error);}if(e.target.id==='open-native-session'){const reply=await window.pywebview.api.open_session(selected().id);if(reply.error)throw new Error(reply.error);}});
 addEventListener('pywebviewready',()=>renderSession());
 $('#view-tabs').onclick=guard(async e=>{const close=e.target.closest('[data-close-term]');if(close){const id=close.dataset.closeTerm;const t=state.snap.terms.find(t=>t.id===id);if(t?.alive){dialog('Close terminal?',`<p>This stops the ${esc(t.name)} process started by Perch. Its saved session can be resumed later.</p>`,'<button data-dismiss>Keep running</button><button class="primary" id="confirm-close">Stop and close</button>');$('#confirm-close').onclick=guard(async()=>{await api('/api/kill',{id});$('#dialog').close();apply(await api('/api/snapshot'));});}else{await api('/api/kill',{id});apply(await api('/api/snapshot'));}return;}const b=e.target.closest('[data-tab]');if(b){state.tab=b.dataset.tab;renderSession();}});
-$('#composer').onsubmit=guard(sendMessage);$('#reply').oninput=()=>{if(state.selected)state.drafts.set(state.selected,$('#reply').value);};
-$('#reply').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();$('#composer').requestSubmit();}};
 $('#history').onpointermove=e=>{if(e.pointerType!=='touch')previewPromptAt(e.clientY);};
 $('#history').onpointerleave=e=>{if(e.pointerType!=='touch')closePromptPreview();};
 $('#history').onpointercancel=closePromptPreview;

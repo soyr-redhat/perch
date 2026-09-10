@@ -2,31 +2,31 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Perch</title><link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/xterm.min.css"><link rel="stylesheet" href="/app.css">
+<title>Perch</title><link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/app.css">
 <script src="/theme.js"></script>
 </head>
 <body>
 <div class="workspace">
   <aside class="sidebar">
-    <div class="brand"><img src="/icon.svg" alt="" width="29" height="29"><strong>Perch</strong><span class="version">Workspace</span></div>
-    <button class="new-session primary" id="new-session"><span>＋</span> New session <kbd>⌘ N</kbd></button>
+    <div class="brand"><img src="/icon.svg" alt="" width="29" height="29"><strong>Perch</strong></div>
+    <nav class="primary-nav"><button id="resources-nav" class="active">Resources <span id="tools-count"></span></button><button id="conversations-nav">Conversations</button></nav><button id="new-session" class="new-session" hidden>Open terminal…</button>
     <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Find a session…" aria-label="Search sessions"><kbd>⌘ K</kbd></label>
     <div class="filters" role="group" aria-label="Filter sessions"><button data-filter="all" aria-pressed="true">All</button><button data-filter="working">Active</button><button data-filter="waiting">Idle</button></div>
     <div class="session-list" id="sessions" aria-label="Sessions"></div>
-    <nav class="sidebar-nav"><button id="tools-nav"><span aria-hidden="true">◇</span> Shared tools <span id="tools-count"></span></button><button id="settings-nav"><span aria-hidden="true">⚙</span> Settings</button></nav>
+    <nav class="sidebar-nav"><button id="settings-nav"><span aria-hidden="true">⚙</span> Settings</button></nav>
     <div class="connection"><span class="status-dot" id="connection-dot"></span><span id="connection-text">Connecting…</span><button id="retry" hidden>Reconnect</button></div>
   </aside>
   <div class="splitter" role="separator" tabindex="0" aria-label="Resize session pane" aria-orientation="vertical" aria-valuemin="230" aria-valuemax="460" aria-valuenow="290"></div>
   <main>
     <header class="toolbar"><div class="breadcrumb"><span id="view-label">Sessions</span><span class="divider">/</span><strong id="project-label">Your workspace</strong></div><button class="icon-button" id="theme" title="Change color theme" aria-label="Change color theme">◐</button></header>
     <div class="health" id="health" role="status" hidden></div>
-    <section id="session-view" class="session-view">
+    <section id="session-view" class="session-view" hidden>
       <div class="session-heading"><div><div class="eyebrow" id="harness-label">Sessions</div><h1 id="session-title">No session selected</h1><div class="session-meta" id="session-meta"></div></div><div class="session-actions" id="session-actions"></div></div>
       <div class="view-tabs" id="view-tabs" role="tablist" aria-label="Session views"></div>
       <div class="activity-view" id="activity-view">
         <div class="history-toolbar" id="history-toolbar" hidden><span id="history-caption">Recent activity</span></div>
         <div class="activity-timeline">
-        <div class="feed" id="feed" tabindex="0" aria-label="Session activity"><div class="welcome"><img src="/icon.svg" width="52" height="52" alt=""><h2>No sessions yet</h2><button class="primary" id="welcome-new">Start a session</button><button class="text-button" id="welcome-tools">Shared tools</button></div></div>
+        <div class="feed" id="feed" tabindex="0" aria-label="Session activity"><div class="welcome"><img src="/icon.svg" width="52" height="52" alt=""><h2>No sessions yet</h2><button class="primary" id="welcome-new">Start a session</button><button class="text-button" id="welcome-tools">Resources</button></div></div>
           <div class="history-rail" id="history-rail">
             <div class="prompt-navigator" id="history" role="listbox" tabindex="0" aria-label="Prompt history" aria-orientation="vertical" aria-activedescendant="history-option">
               <div class="prompt-marks" id="history-marks" aria-hidden="true"></div>
@@ -37,14 +37,14 @@
           </div>
         </div>
         <button class="follow-button" id="follow" hidden>↓ New activity</button>
-        <form class="composer" id="composer" hidden><textarea id="reply" rows="2" placeholder="Continue the conversation…" aria-label="Message to selected agent"></textarea><div class="composer-footer"><span id="reply-hint">⌘ Enter to send</span><button class="primary" id="send" type="submit">Send message <span aria-hidden="true">↗</span></button></div></form>
+
       </div>
       <div class="terminal-view" id="terminal-view" hidden><div class="terminal-status" id="terminal-status"></div><div class="terminal-mount" id="terminal-mount"></div></div>
     </section>
-    <section id="tools-view" class="tools-view" hidden>
-      <div class="page-heading"><div><h1>Shared tools</h1></div><button class="primary" id="preview-sync">Review sharing</button></div>
+    <section id="tools-view" class="tools-view">
+      <div class="page-heading"><div><h1>Resources</h1></div><button class="primary" id="preview-sync">Review sharing</button></div>
 
-      <div class="tools-tabs"><button data-tooltab="skills" class="selected">Skills <span id="skill-count">0</span></button><button data-tooltab="mcp">MCP servers <span id="mcp-count">0</span></button><div class="spacer"></div><button id="refresh-tools">Refresh</button></div>
+      <div class="resource-controls"><input id="resource-search" type="search" placeholder="Find a resource…" aria-label="Search resources"><div class="tools-tabs"><button data-tooltab="all" class="selected">All</button><button data-tooltab="skill">Skills</button><button data-tooltab="mcp">MCP servers</button><button data-tooltab="plugin">Plugins</button><button id="refresh-tools">Refresh</button></div></div><div id="resource-errors" role="status" hidden></div>
       <div id="tools-table" class="tools-table"></div>
     </section>
     <footer class="statusbar"><span id="watching">Discovering local sessions…</span><span id="mode-label">Local workspace</span></footer>
@@ -52,5 +52,5 @@
 </div>
 <dialog id="dialog"><div id="dialog-content"></div></dialog>
 <div id="toast" class="toast" role="status" hidden></div>
-<script src="/xterm.min.js"></script><script src="/xterm-addon-fit.min.js"></script><script src="/app.js"></script>
+<script src="/app.js"></script>
 </body></html>

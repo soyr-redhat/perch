@@ -11,6 +11,7 @@ import tempfile
 import time
 import urllib.request
 import zipfile
+from uuid import uuid4
 
 
 def wait_for(fn, proc, timeout=20):
@@ -30,6 +31,10 @@ def main():
     fixture = str(Path(__file__).resolve().parents[1] / "tests" / "fixture_harness.py")
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
+        target = root / "sessions/context-target.jsonl"
+        target.parent.mkdir()
+        target.write_text(json.dumps({"id": "context-target", "cwd": str(root), "role": "user", "text": "Destination"}) + "\n")
+        os.utime(target, (time.time() - 60, time.time() - 60))
         (root / "settings.json").write_text(json.dumps({"harnesses": {"disabled": ["claude", "codex", "omp"]}}))
         (root / "sources.json").write_text(json.dumps({"sources": [{
             "id": "fixture", "patterns": [str(root / "sessions" / "*.jsonl")],
@@ -99,7 +104,19 @@ def main():
             cli_export = subprocess.run([executable, "--export-session", "fixture:new-session"], env={**os.environ, "PERCH_DATA_DIR": str(root)}, capture_output=True, timeout=15)
             assert cli_export.returncode == 0, cli_export.stderr
             assert json.loads(cli_export.stdout)["manifest"]["recording"]["sha256"] == exported["manifest"]["recording"]["sha256"]
-            print("Packaged single instance, backend, terminal input/output, headless reply, desktop/CLI export, and cleanup passed")
+            catalog = subprocess.run([executable, "--capabilities"], env={**os.environ, "PERCH_DATA_DIR": str(root)}, capture_output=True, timeout=15)
+            assert catalog.returncode in (0, 1), catalog.stderr
+            assert isinstance(json.loads(catalog.stdout)["resources"], list)
+            wait_for(lambda: any(a["id"] == "fixture:context-target" and a["state"] != "working" for a in request("/api/snapshot")["agents"]), proc)
+            transfer_id = str(uuid4())
+            prepared = subprocess.run([executable, "--transfer", "fixture:new-session", "--to", "fixture:context-target", "--transfer-id", transfer_id], env={**os.environ, "PERCH_DATA_DIR": str(root)}, capture_output=True, timeout=15)
+            assert prepared.returncode == 0, prepared.stderr
+            assert json.loads(prepared.stdout)["status"] == "prepared"
+            sent = subprocess.run([executable, "--send-transfer", transfer_id], env={**os.environ, "PERCH_DATA_DIR": str(root)}, capture_output=True, timeout=15)
+            assert sent.returncode == 0, sent.stderr
+            wait_for(lambda: request("/api/transfers/" + transfer_id)["status"] == "delivered", proc)
+            assert "Read the conversation context at" in target.read_text()
+            print("Packaged single instance, backend, terminal input/output, headless reply, export, resource inventory, context transfer, and cleanup passed")
         finally:
             marker = root / "fixture-started.json"
             print("Fixture startup:", marker.read_text() if marker.exists() else "never entered fixture", flush=True)
