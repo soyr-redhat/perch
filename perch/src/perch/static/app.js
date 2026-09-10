@@ -106,7 +106,11 @@ function renderSession() {
   const h=a&&harness(a.harness,a.harness_name);
   const nativeCodex=a?.harness==='codex'&&Boolean(window.pywebview?.api);
   const actionKey=JSON.stringify([a?.id,h?.canResume,nativeCodex,Boolean(window.pywebview?.api)]);
-  if($('#session-actions').dataset.key!==actionKey){$('#session-actions').dataset.key=actionKey;$('#session-actions').innerHTML=a?`${nativeCodex?'<button id="open-native-session">Open in Codex</button>':''}${h.canResume?(window.pywebview?.api?'<button id="open-cli-session">Open CLI</button>':'<button id="resume-session">Open terminal</button>'):''}<button id="transfer-session">Transfer…</button><button id="handoff-session">Export…</button>`:'';}
+  if($('#session-actions').dataset.key!==actionKey){
+    $('#session-actions').dataset.key=actionKey;
+    const openCli=h?.canResume?(window.pywebview?.api?'<button class="inline-action" id="open-cli-session">Open CLI</button>':'<button class="inline-action" id="resume-session">Open terminal</button>'):'';
+    $('#session-actions').innerHTML=a?`${nativeCodex?'<button class="inline-action" id="open-native-session">Open in Codex</button>':openCli}<button class="inline-action" id="transfer-session">Transfer…</button><details class="action-menu"><summary>More <span aria-hidden="true">⌄</span></summary><div class="action-menu-items">${nativeCodex?openCli:''}<button id="handoff-session" aria-label="Export conversation">Export…</button></div></details>`:'';
+  }
   const tabsKey=JSON.stringify([state.snap.terms.map(t=>[t.id,t.name,t.alive]),state.tab]);
   if(tabsKey!==state.tabsKey){state.tabsKey=tabsKey;$('#view-tabs').innerHTML=`<button role="tab" data-tab="activity" aria-selected="${state.tab==='activity'}">Activity</button>`+state.snap.terms.map(t=>`<span class="terminal-tab"><button role="tab" data-tab="${esc(t.id)}" aria-selected="${state.tab===t.id}">▣ ${esc(t.name)}${t.alive?'':' · exited'}</button><button class="close-term" data-close-term="${esc(t.id)}" aria-label="Close ${esc(t.name)} terminal">×</button></span>`).join('');}
   $('#activity-view').hidden=state.tab!=='activity';$('#terminal-view').hidden=state.tab==='activity';
@@ -238,8 +242,9 @@ async function showTerm(id) {
 }
 async function spawn(hid,cwd,session) {const data=await api('/api/spawn',{harness:hid,cwd:cwd||'',...(session?{session}:{})});state.page='sessions';state.tab=data.term.id;apply(data.snapshot);showPage();renderSession();return data.term;}
 function dialog(title,body,footer='') {
-  $('#dialog-content').innerHTML=`<div class="dialog-head"><h2>${esc(title)}</h2><button data-dismiss class="icon-button" aria-label="Close dialog">×</button></div><div class="dialog-body">${body}</div>${footer?`<div class="dialog-footer">${footer}</div>`:''}`;
-  if(!$('#dialog').open)$('#dialog').showModal();
+  const wasOpen=$('#dialog').open;
+  $('#dialog-content').innerHTML=`<div class="dialog-head"><h2 id="dialog-title" tabindex="-1">${esc(title)}</h2><button data-dismiss class="icon-button" aria-label="Close dialog">×</button></div><div class="dialog-body">${body}</div>${footer?`<div class="dialog-footer">${footer}</div>`:''}`;
+  if(!wasOpen)$('#dialog').showModal();else $('#dialog-title').focus({preventScroll:true});
 }
 function newSession() {
   const hs=state.snap?.harnesses.filter(h=>h.canSpawn)||[];
@@ -278,7 +283,9 @@ function showTransfer(receipt) {
 async function openTools() {
   state.page='tools';showPage();renderSidebar();
   if(!state.tools)$('#tools-table').innerHTML='<p class="empty-list">Reading resources…</p>';
-  state.tools=await api('/api/capabilities');renderTools();
+  const refresh=$('#refresh-tools');refresh.disabled=true;refresh.setAttribute('aria-busy','true');
+  try {state.tools=await api('/api/capabilities');renderTools();}
+  finally {refresh.disabled=false;refresh.removeAttribute('aria-busy');}
 }
 function renderTools() {
   if(!state.tools)return;
@@ -296,10 +303,21 @@ async function reviewConnection(id,target) {
   if($('#apply-connection'))$('#apply-connection').onclick=async()=>{const button=$('#apply-connection');button.disabled=true;try{const result=await api('/api/capabilities/link',{id,target,revision:plan.revision,apply:true});$('#link-status').textContent=result.applied?'Connected.':result.reason;button.hidden=result.applied;await openTools();}catch(e){$('#link-status').textContent=e.message;}finally{button.disabled=false;}};
 }
 async function resolveSkill(name,source=null) {
+  const previous=source?$('#skill-sources'):null;
   const data=await api('/api/skills/review',{name,source});
+  if(previous&&(!previous.isConnected||!$('#dialog').open))return;
   const report=data.report,issues=[...report.skills.errors,...report.skills.conflicts];
-  dialog(`Share ${name}`,`<label class="field">Shared source<select id="skill-source"><option value="">Choose a source…</option>${data.sources.map(s=>`<option value="${esc(s.id)}" ${s.id===source?'selected':''}>${esc(s.path)}</option>`).join('')}</select></label>${data.differences.filter(d=>d.count).map(d=>`<details><summary>${d.count} differing file${d.count===1?'':'s'} · ${esc(d.path)}</summary><ul>${d.files.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>${d.diff?`<pre class="skill-diff">${esc(d.diff)}</pre>`:''}</details>`).join('')}<p>Existing copies are backed up before their harness entries are linked to this source.</p><p id="skill-status" role="status">${issues.map(i=>esc(i.reason)).join(' ')}</p>`,`<button data-dismiss>Cancel</button><button class="primary" id="apply-skill" ${!source||issues.length?'disabled':''}>Use this source</button>`);
-  $('#skill-source').onchange=guard(e=>resolveSkill(name,e.target.value||null));
+  dialog(`Share ${name}`,`<fieldset class="source-choices" id="skill-sources"><legend>Shared source</legend>${data.sources.map(s=>`<label class="source-choice"><input type="radio" name="skill-source" value="${esc(s.id)}" ${s.id===source?'checked':''}><span><strong>${esc(s.harnesses.map(h=>names[h]||h).join(', '))}</strong><small>${esc(s.path)}</small></span></label>`).join('')}</fieldset>${data.differences.filter(d=>d.count).map(d=>`<details class="source-difference"><summary>${d.count} differing file${d.count===1?'':'s'} · ${esc(d.path)}</summary><ul>${d.files.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>${d.diff?`<pre class="skill-diff">${esc(d.diff)}</pre>`:''}</details>`).join('')}<p>Existing copies are backed up before their harness entries are linked to this source.</p><p id="skill-status" role="status">${issues.map(i=>esc(i.reason)).join(' ')}</p>`,`<button data-dismiss class="text-button">Cancel</button><button class="primary" id="apply-skill" ${!source||issues.length?'disabled':''}>Use this source</button>`);
+  if(previous)$('input[name="skill-source"]:checked')?.focus({preventScroll:true});
+  $('#skill-sources').onchange=guard(async e=>{
+    const choices=e.currentTarget,apply=$('#apply-skill');
+    choices.disabled=true;apply.disabled=true;choices.setAttribute('aria-busy','true');
+    try {await resolveSkill(name,e.target.value);}
+    catch(error){
+      for(const input of choices.querySelectorAll('input'))input.checked=input.value===source;
+      apply.disabled=!source||Boolean(issues.length);throw error;
+    } finally {choices.disabled=false;choices.removeAttribute('aria-busy');}
+  });
   $('#apply-skill').onclick=async()=>{const button=$('#apply-skill');button.disabled=true;try{const result=await api('/api/skills/review',{name,source,revision:report.revision,apply:true});showPlan(result.report);await openTools();}catch(e){$('#skill-status').textContent=e.message;button.disabled=false;}};
 }
 async function previewSync() {
@@ -308,20 +326,24 @@ async function previewSync() {
 function showPlan(r) {
   const additions=[...(r.skills.linked||[]).map(x=>`${x.skill} → ${names[x.into]||x.into}`),...Object.entries(r.mcp.added||{}).flatMap(([target,items])=>items.map(x=>`${x} → ${names[target]||target}`))];
   const issues=[...(r.skills.conflicts||[]),...(r.skills.errors||[]),...(r.mcp.conflicts||[]),...(r.mcp.blocked||[]),...(r.mcp.errors||[])];
-  dialog(r.dryRun?'Review sharing changes':'Sharing complete',`${additions.length?`<ul class="plan-list plan-success">${additions.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'<p>Nothing to share.</p>'}${issues.length?`<p><strong>Needs attention</strong></p><ul class="plan-list plan-issue">${issues.map(x=>`<li>${esc(x.skill||x.server||x.source||'Configuration')}: ${esc(x.reason||'Conflicting source')}${x.resolvable?` <button data-resolve-skill="${esc(x.skill)}">Choose source…</button>`:''}</li>`).join('')}</ul>`:''}`,'<button data-dismiss>Close</button>'+(r.dryRun&&additions.length?'<button class="primary" id="apply-sync">Apply additions</button>':''));
+  dialog(r.dryRun?'Review sharing changes':'Sharing complete',`${additions.length?`<ul class="plan-list plan-success">${additions.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'<p>Nothing to share.</p>'}${issues.length?`<p><strong>Needs attention</strong></p><ul class="plan-list plan-issue">${issues.map(x=>`<li>${x.resolvable?`<button class="navigation-row" data-resolve-skill="${esc(x.skill)}"><span><strong>${esc(x.skill)}</strong><small>${esc(x.reason||'Choose a shared source')}</small></span><span class="row-chevron" aria-hidden="true">›</span></button>`:`<div class="issue-description"><strong>${esc(x.skill||x.server||x.source||'Configuration')}</strong><small>${esc(x.reason||'Conflicting source')}</small></div>`}</li>`).join('')}</ul>`:''}`,'<button data-dismiss>Close</button>'+(r.dryRun&&additions.length?'<button class="primary" id="apply-sync">Apply additions</button>':''));
   document.querySelectorAll('[data-resolve-skill]').forEach(b=>b.onclick=guard(()=>resolveSkill(b.dataset.resolveSkill)));
   if($('#apply-sync'))$('#apply-sync').onclick=guard(async()=>{const button=$('#apply-sync');button.disabled=true;try{const applied=await api('/api/sync',{preview:false,revision:r.revision});showPlan(applied);if(state.page==='tools'){state.tools=await api('/api/capabilities');renderTools();}}finally{button.disabled=false;}});
 }
-async function installationSettings() {
+async function installationSettings(onBack=null) {
   const info=await window.pywebview.api.installation();
   if(info.error)throw new Error(info.error);
   dialog('Installation',info.available?`<label class="field">Application<input readonly value="${esc(info.target)}"></label><p>${info.installed?'Application installed.':'Application will be installed here.'}</p><label class="choice-row">Command-line launchers<input id="install-cli" type="checkbox" checked></label><p id="installation-status" role="status">${info.shortcuts.map(s=>`${esc(s.name)}: ${esc(s.status)}`).join(' · ')}</p>`:`<p>${esc(info.reason)}</p>`,`<button data-dismiss>Close</button>${info.available?'<button id="repair-installation" class="primary">Repair installation</button>':''}`);
+  if(onBack){$('.dialog-body').insertAdjacentHTML('afterbegin','<button class="inline-action back-link" id="back-settings">‹ Settings</button>');$('#back-settings').onclick=onBack;}
   if($('#repair-installation'))$('#repair-installation').onclick=async()=>{const button=$('#repair-installation');button.disabled=true;try{const result=await window.pywebview.api.installation(true,$('#install-cli').checked);if(result.error)throw new Error(result.error);$('#installation-status').textContent='Installation repaired.';}catch(e){$('#installation-status').textContent=e.message;}finally{button.disabled=false;}};
 }
 async function settings() {
   const data=await api('/api/settings');state.cfg=data.settings;const cfg=state.cfg;
-  dialog('Workspace settings',`<label class="field">Appearance<select id="setting-theme">${['system','light','dark'].map(t=>`<option value="${t}" ${cfg.appearance?.theme===t?'selected':''}>${t[0].toUpperCase()+t.slice(1)}</option>`).join('')}</select></label><label class="field">Keep recent sessions for (days)<input id="setting-days" type="number" min="0.1" max="90" step="0.1" value="${cfg.watching.quietDays}"></label><p><strong>Watch harnesses</strong></p>${data.harnesses.map(h=>`<label class="choice-row"><span>${esc(h.name)}<small>${h.installed?'Installed':'Not installed'}</small></span><input type="checkbox" data-harness="${esc(h.id)}" ${h.enabled?'checked':''}></label>`).join('')}<p><strong>Share with</strong></p>${Object.entries(names).filter(([id])=>id!=='codex-legacy').map(([id,name])=>`<label class="choice-row"><span>${esc(name)}${id==='claude-desktop'?'<small>Local stdio MCP servers only</small>':''}</span><input type="checkbox" data-target="${id}" ${cfg.sharing.targets.includes(id)?'checked':''}></label>`).join('')}<label class="choice-row">Share skills<input type="checkbox" id="setting-skills" ${cfg.sharing.skills?'checked':''}></label><label class="choice-row">Share MCP servers<input type="checkbox" id="setting-mcp" ${cfg.sharing.mcp?'checked':''}></label><label class="choice-row"><span>Automatic sharing<small>Share new tools automatically</small></span><input type="checkbox" id="setting-auto" ${cfg.sharing.autoSync?'checked':''}></label>`,`<button data-dismiss>Cancel</button>${window.pywebview?.api?'<button id="installation-settings">Installation…</button>':''}<button class="primary" id="save-settings">Save settings</button>`);
-  if($('#installation-settings'))$('#installation-settings').onclick=guard(installationSettings);
+  dialog('Workspace settings',`<label class="field">Appearance<select id="setting-theme">${['system','light','dark'].map(t=>`<option value="${t}" ${cfg.appearance?.theme===t?'selected':''}>${t[0].toUpperCase()+t.slice(1)}</option>`).join('')}</select></label><label class="field">Keep recent sessions for (days)<input id="setting-days" type="number" min="0.1" max="90" step="0.1" value="${cfg.watching.quietDays}"></label><p><strong>Watch harnesses</strong></p>${data.harnesses.map(h=>`<label class="choice-row"><span>${esc(h.name)}<small>${h.installed?'Installed':'Not installed'}</small></span><input type="checkbox" data-harness="${esc(h.id)}" ${h.enabled?'checked':''}></label>`).join('')}<p><strong>Share with</strong></p>${Object.entries(names).filter(([id])=>id!=='codex-legacy').map(([id,name])=>`<label class="choice-row"><span>${esc(name)}${id==='claude-desktop'?'<small>Local stdio MCP servers only</small>':''}</span><input type="checkbox" data-target="${id}" ${cfg.sharing.targets.includes(id)?'checked':''}></label>`).join('')}<label class="choice-row">Share skills<input type="checkbox" id="setting-skills" ${cfg.sharing.skills?'checked':''}></label><label class="choice-row">Share MCP servers<input type="checkbox" id="setting-mcp" ${cfg.sharing.mcp?'checked':''}></label><label class="choice-row"><span>Automatic sharing<small>Share new tools automatically</small></span><input type="checkbox" id="setting-auto" ${cfg.sharing.autoSync?'checked':''}></label>${window.pywebview?.api?'<button class="navigation-row installation-row" id="installation-settings"><span>Installation<small>Application and command-line launchers</small></span><span class="row-chevron" aria-hidden="true">›</span></button>':''}`,`<button data-dismiss class="text-button">Cancel</button><button class="primary" id="save-settings">Save settings</button>`);
+  if($('#installation-settings'))$('#installation-settings').onclick=guard(async()=>{
+    const content=[...$('#dialog-content').children];
+    await installationSettings(()=>{$('#dialog-content').replaceChildren(...content);$('#installation-settings').focus();});
+  });
   $('#save-settings').onclick=guard(async()=>{const days=Number($('#setting-days').value);if(!Number.isFinite(days)||days<.1||days>90)throw new Error('Choose between 0.1 and 90 days');const body={watching:{quietDays:days},appearance:{theme:$('#setting-theme').value},harnesses:{disabled:[...document.querySelectorAll('[data-harness]')].filter(x=>!x.checked).map(x=>x.dataset.harness)},sharing:{skills:$('#setting-skills').checked,mcp:$('#setting-mcp').checked,autoSync:$('#setting-auto').checked,targets:[...document.querySelectorAll('[data-target]')].filter(x=>x.checked).map(x=>x.dataset.target)}};state.cfg=(await api('/api/settings',body)).settings;setTheme(state.cfg.appearance.theme);$('#dialog').close();toast('Settings saved');});
 }
 $('#sessions').ondragstart=e=>{const row=e.target.closest('[data-agent]');if(row){e.dataTransfer.setData('application/x-perch-session',row.dataset.agent);e.dataTransfer.effectAllowed='copy';}};
@@ -334,7 +356,9 @@ $('#new-session').onclick=newSession;$('#welcome-new').onclick=newSession;$('#we
 $('#resources-nav').onclick=guard(openTools);$('#conversations-nav').onclick=()=>{state.page='sessions';showPage();renderSidebar();renderSession();};
 $('#resource-search').oninput=e=>{state.resourceSearch=e.target.value.toLowerCase();renderTools();};$('#tools-table').onclick=guard(async e=>{const skill=e.target.closest('[data-inspect-skill]');if(skill){await resolveSkill(skill.dataset.inspectSkill);return;}const button=e.target.closest('[data-resource]');if(button)await reviewConnection(button.dataset.resource,button.dataset.destination);});$('#settings-nav').onclick=guard(settings);$('#retry').onclick=guard(boot);
 $('#theme').onclick=guard(async()=>{const mode=document.documentElement.dataset.theme==='dark'?'light':'dark';setTheme(mode);if(state.snap?.demo)return;await api('/api/settings',{appearance:{theme:mode}});});
-$('#session-actions').onclick=guard(async e=>{if(e.target.id==='resume-session'){const a=selected();await spawn(a.harness,a.cwd,a.id.split(':').slice(1).join(':'));}if(e.target.id==='handoff-session')await handoff();if(e.target.id==='transfer-session')transferConversation(selected().id);if(e.target.id==='open-cli-session'){const reply=await window.pywebview.api.open_cli(selected().id);if(reply.error)throw new Error(reply.error);}if(e.target.id==='open-native-session'){const reply=await window.pywebview.api.open_session(selected().id);if(reply.error)throw new Error(reply.error);}});
+$('#session-actions').onclick=guard(async e=>{const button=e.target.closest('button');if(!button)return;const menu=button.closest('details');if(menu){menu.open=false;menu.querySelector('summary').focus();}if(button.id==='resume-session'){const a=selected();await spawn(a.harness,a.cwd,a.id.split(':').slice(1).join(':'));}if(button.id==='handoff-session')await handoff();if(button.id==='transfer-session')transferConversation(selected().id);if(button.id==='open-cli-session'){const reply=await window.pywebview.api.open_cli(selected().id);if(reply.error)throw new Error(reply.error);}if(button.id==='open-native-session'){const reply=await window.pywebview.api.open_session(selected().id);if(reply.error)throw new Error(reply.error);}});
+addEventListener('click',e=>{const menu=$('.action-menu[open]');if(menu&&!menu.contains(e.target))menu.open=false;});
+addEventListener('keydown',e=>{const menu=$('.action-menu[open]');if(e.key==='Escape'&&menu){e.preventDefault();menu.open=false;menu.querySelector('summary').focus();}});
 addEventListener('pywebviewready',()=>renderSession());
 $('#view-tabs').onclick=guard(async e=>{const close=e.target.closest('[data-close-term]');if(close){const id=close.dataset.closeTerm;const t=state.snap.terms.find(t=>t.id===id);if(t?.alive){dialog('Close terminal?',`<p>This stops the ${esc(t.name)} process started by Perch. Its saved session can be resumed later.</p>`,'<button data-dismiss>Keep running</button><button class="primary" id="confirm-close">Stop and close</button>');$('#confirm-close').onclick=guard(async()=>{await api('/api/kill',{id});$('#dialog').close();apply(await api('/api/snapshot'));});}else{await api('/api/kill',{id});apply(await api('/api/snapshot'));}return;}const b=e.target.closest('[data-tab]');if(b){state.tab=b.dataset.tab;renderSession();}});
 $('#history').onpointermove=e=>{if(e.pointerType!=='touch')previewPromptAt(e.clientY);};

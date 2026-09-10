@@ -44,13 +44,13 @@
     <section id="tools-view" class="tools-view">
       <div class="page-heading"><div><h1>Resources</h1></div><button class="primary" id="preview-sync">Review sharing</button></div>
 
-      <div class="resource-controls"><input id="resource-search" type="search" placeholder="Find a resource…" aria-label="Search resources"><div class="tools-tabs"><button data-tooltab="all" class="selected">All</button><button data-tooltab="skill">Skills</button><button data-tooltab="mcp">MCP servers</button><button data-tooltab="plugin">Plugins</button><button id="refresh-tools">Refresh</button></div></div><div id="resource-errors" role="status" hidden></div>
+      <div class="resource-controls"><input id="resource-search" type="search" placeholder="Find a resource…" aria-label="Search resources"><div class="tools-tabs"><button data-tooltab="all" class="selected">All</button><button data-tooltab="skill">Skills</button><button data-tooltab="mcp">MCP servers</button><button data-tooltab="plugin">Plugins</button></div><button class="inline-action refresh-action" id="refresh-tools"><span aria-hidden="true">↻</span> Refresh</button></div><div id="resource-errors" role="status" hidden></div>
       <div id="tools-table" class="tools-table"></div>
     </section>
     <footer class="statusbar"><span id="watching">Discovering local sessions…</span><span id="mode-label">Local workspace</span></footer>
   </main>
 </div>
-<dialog id="dialog"><div id="dialog-content"></div></dialog>
+<dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="/app.js"></script>
 </body></html>

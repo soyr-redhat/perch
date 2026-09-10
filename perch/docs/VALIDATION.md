@@ -85,3 +85,18 @@ Windows WebView2 interaction were not exercised in this refinement.
 ## Skill consolidation and installation repair
 
 Tests cover complete-folder comparison, support-file differences, executable bits, external symlink rejection, explicit desktop source selection, stale review rejection, preserved unrelated destinations, link failure rollback, hard-interruption recovery, backups, and repeat operations. Installation tests cover regular launchers, old symlink migration, optional CLI setup, name collisions, bundle validation, rollback, shell metacharacters in paths, and Windows user-PATH preservation. Native Windows installer interaction remains an acceptance check.
+
+## Direct interaction refinement — September 10, 2026
+
+Sharing conflicts now open from full rows, and source selection uses labelled radio
+rows. Isolated browser checks covered selecting by row, changing sources with arrow
+keys, retained focus, and applying a source through the production sharing endpoint.
+Conversation actions were checked through keyboard activation of Export. A simulated
+desktop bridge verified that navigating to Installation and back preserves unsaved
+numeric and checkbox settings and returns focus to the navigation row.
+
+The 116-test Python suite passed on macOS (one Windows-only skip), as did the packaged
+backend/terminal/transfer smoke checks. Native macOS settings rendered correctly;
+screen capture failed during subsequent interaction, so the remaining navigation
+check used the isolated bridge preview. Windows GUI, touch, and narrow-layout checks
+remain outstanding for this refinement. Motion respects reduced-motion preferences.

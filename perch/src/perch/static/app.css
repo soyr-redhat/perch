@@ -27,3 +27,53 @@
 .skill-diff{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.dialog-body details{overflow-wrap:anywhere;min-width:0}.field,.field select{min-width:0}.tools-table .resource-name{border:0;border-radius:3px;background:none;text-align:left;padding:0;color:var(--text);font-size:inherit;font-weight:500}.resource-name::after{content:' ›';color:var(--muted)}.resource-name:hover{text-decoration:underline;text-underline-offset:3px}.tools-table .connection-action{border:0;background:none;color:var(--muted);border-radius:4px;padding:6px 4px}.tools-table tr:hover .connection-action,.tools-table .connection-action:focus-visible{color:var(--accent)}.tools-table .connection-action:hover{background:var(--hover)}.connection-action span{font-size:14px}
 
 .tools-table td:nth-child(2){min-width:120px}.tools-table td:nth-child(n+3){min-width:100px}
+
+/* Direct choices and quiet navigation; motion follows user interaction. */
+button,.navigation-row,.source-choice,.choice-row,summary{transition:background-color 140ms ease,color 140ms ease,border-color 140ms ease}
+button.inline-action,.session-actions .inline-action{border:0;background:transparent;color:var(--muted);padding:7px 9px}
+button.inline-action:hover,.session-actions .inline-action:hover{background:var(--hover);color:var(--text)}
+.session-actions{align-items:center;flex-wrap:wrap}
+.action-menu{position:relative;font-size:11px}
+.action-menu summary{list-style:none;cursor:pointer;padding:7px 9px;border-radius:7px;color:var(--muted);white-space:nowrap}
+.action-menu summary::-webkit-details-marker{display:none}
+.action-menu summary:hover,.action-menu[open]>summary{background:var(--hover);color:var(--text)}
+.action-menu summary:focus-visible,.source-difference summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.action-menu-items{position:absolute;right:0;top:calc(100% + 5px);z-index:8;min-width:150px;padding:5px;background:var(--panel);border:1px solid var(--line);border-radius:9px;box-shadow:0 6px 20px #0002;animation:surface-in 130ms ease-out}
+.session-actions .action-menu-items button{display:block;width:100%;border:0;text-align:left;background:transparent;padding:9px 10px;color:var(--text)}
+.session-actions .action-menu-items button:hover{background:var(--hover)}
+.resource-controls{margin-top:22px}
+.resource-controls .tools-tabs{min-width:260px;gap:18px}
+.refresh-action{font-size:12px;display:flex;align-items:center;gap:6px}
+.refresh-action span{font-size:18px;line-height:1}
+.refresh-action[aria-busy=true] span{animation:refresh-turn 900ms linear infinite}
+.navigation-row{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;padding:12px;text-align:left;white-space:normal;border:0;border-radius:7px;font-size:12px}
+.navigation-row>span:first-child{min-width:0}
+.navigation-row strong{font-weight:500}
+.navigation-row small,.issue-description small{display:block;color:var(--muted);font-size:11px;line-height:1.6;margin-top:3px;overflow-wrap:anywhere}
+.row-chevron{color:var(--muted);font-size:20px;transition:transform 140ms ease}
+.navigation-row:hover .row-chevron,.navigation-row:focus-visible .row-chevron{transform:translateX(2px);color:var(--accent)}
+.plan-issue{list-style:none;padding:0;color:var(--text)}
+.plan-issue li+li{border-top:1px solid var(--line)}
+.issue-description{padding:12px;font-size:12px}
+.issue-description strong{font-weight:500}
+.source-choices{padding:0;border:0;margin:0 0 20px;min-width:0}
+.source-choices legend{font-size:12px;font-weight:500;margin-bottom:8px;padding:0}
+.source-choice{display:flex;align-items:center;gap:12px;padding:12px;margin:3px 0;border:1px solid transparent;border-radius:8px;cursor:pointer}
+.source-choice:hover{background:var(--hover)}
+.source-choice:has(:checked){background:var(--selected);border-color:color-mix(in srgb,var(--accent) 30%,transparent)}
+.source-choice:has(:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.source-choice input{accent-color:var(--accent);flex:none;margin:0;width:16px;height:16px}
+.source-choice strong{font-size:12px;font-weight:500}
+.source-choice small{display:block;font-size:11px;color:var(--muted);overflow-wrap:anywhere;margin-top:3px}
+.source-choice span{min-width:0}
+.source-choices:disabled{opacity:.65}
+.source-difference{border-top:1px solid var(--line);padding:12px 0;font-size:12px}
+.source-difference summary{cursor:pointer;color:var(--muted)}
+.installation-row{margin-top:16px}
+.back-link{margin:-10px 0 12px -9px;font-size:12px}
+.choice-row{cursor:pointer}
+.choice-row:hover{background:color-mix(in srgb,var(--hover) 50%,transparent)}
+dialog[open]{animation:surface-in 150ms ease-out}
+@keyframes surface-in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+@keyframes refresh-turn{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
