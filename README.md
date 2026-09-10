@@ -6,8 +6,6 @@
 
 Perch is a native desktop workspace for local coding harnesses. It shows recorded Claude Code, Codex, and omp sessions in one place, opens compatible sessions in an embedded terminal, and uses the same sharing engine from both the desktop app and CLI for skills and MCP servers.
 
-The bird is Perch’s application icon: a small bird on a branch, representing a compact place to watch and move between active sessions. The same SVG supplies the in-app mark and the generated macOS and Windows icons.
-
 ## Install
 
 ```sh
