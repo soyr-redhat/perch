@@ -170,7 +170,7 @@ class SharedOAuth(httpx.Auth):
     async def async_auth_flow(self, request):
         deadline = time.monotonic() + 35
         while True:
-            lock = sync_lock(resources.root() / 'auth-locks' / _auth_key(self.record))
+            lock = sync_lock(resources.root() / 'auth-locks' / _auth_key(self.record), serialize_threads=False)
             try:
                 lock.__enter__()
                 break
@@ -262,7 +262,7 @@ def status(identifier):
 
 def sign_out(identifier):
     record = _record(identifier)
-    with sync_lock(resources.root() / 'auth-locks' / _auth_key(record)):
+    with sync_lock(resources.root() / 'auth-locks' / _auth_key(record), serialize_threads=False):
         credentials.delete_secret(_auth_key(record) + '-tokens')
     return {'status': 'signed-out'}
 

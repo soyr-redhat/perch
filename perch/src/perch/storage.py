@@ -39,8 +39,8 @@ def write_json(path: str | Path, data: dict) -> None:
 
 
 @contextlib.contextmanager
-def sync_lock(directory: str | Path = DATA_DIR):
-    with _LOCK:
+def sync_lock(directory: str | Path = DATA_DIR, *, serialize_threads=True):
+    with _LOCK if serialize_threads else contextlib.nullcontext():
         root = Path(directory)
         root.mkdir(parents=True, exist_ok=True)
         with (root / "sync.lock").open("a+b") as handle:
@@ -48,11 +48,12 @@ def sync_lock(directory: str | Path = DATA_DIR):
             if os.name == "nt":
                 import msvcrt
 
-                if not handle.read(1):
-                    handle.write(b"0")
-                    handle.flush()
-                handle.seek(0)
                 try:
+                    # Reading a byte already locked by another client fails on Windows.
+                    if os.fstat(handle.fileno()).st_size == 0:
+                        handle.write(b"0")
+                        handle.flush()
+                    handle.seek(0)
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                 except OSError as exc:
                     raise ValueError("Another Perch sync is running") from exc
