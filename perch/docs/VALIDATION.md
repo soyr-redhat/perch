@@ -153,3 +153,7 @@ formatting under the application's CSP, YAML file switching, saving formatted sk
 and wrapping/contrast in both themes. The document uses the existing detail scrollbar;
 Save remains above the document. Physical touch and native Windows editor interaction
 remain acceptance checks. CI rebuilds and compares the committed offline assets.
+
+## Enablement and dependency checks
+
+Capability tests cover native plugin presence, identical-version grouping, conflicting versions, disabled and project-scoped sources, ambiguous caches, missing executables, host dependencies in reference files, failed writes, and plugin changes between preview and apply. CLI and desktop synchronization use the same checks. Tests use isolated plugin discovery and real fixture executables; they never enable the developer's plugins or contact a provider. Instruction-only classification is a transfer check, not proof of task-level behavior. Live MCP authentication remains separate from configured presence.

@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from perch import scanner, server, settings, storage, sync
+from perch import capabilities, scanner, server, settings, storage, sync
 from perch.term import TermRegistry
 
 
@@ -22,6 +22,7 @@ class Workspace:
     def __init__(self, root):
         self.root = Path(root)
         self.stack = contextlib.ExitStack()
+        self.stack.enter_context(patch.object(capabilities, "discover_plugins", return_value=([], [])))
         self.paths = {key: str(self.root / (key + (".toml" if key == "codex" else ".json"))) for key in ("claude", "claude_mcpjson", "codex", "omp", "claude-desktop")}
         roots = {key: str(self.root / "skills" / key) for key in ("claude", "codex", "omp")}
         for obj, name, value in (
@@ -48,7 +49,7 @@ class Workspace:
         skill = Path(roots["claude"]) / "fixture-review"
         skill.mkdir(parents=True, exist_ok=True)
         (skill / "SKILL.md").write_text("---\nname: fixture-review\ndescription: Test fixture\n---\nReview fixture code.")
-        Path(self.paths["claude"]).write_text(json.dumps({"mcpServers": {"fixture-tool": {"command": "fixture-command"}}}))
+        Path(self.paths["claude"]).write_text(json.dumps({"mcpServers": {"fixture-tool": {"command": sys.executable}}}))
         self.scanner.start_watching()
         self.server = server.serve(self.scanner, TermRegistry(), 0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()

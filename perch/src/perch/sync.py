@@ -14,6 +14,7 @@ import subprocess
 import time
 import tomlkit
 
+from .compatibility import command_requirement, skill_requirement
 from .storage import DATA_DIR, atomic_write, sync_lock, write_json
 
 PERCH_DIR = str(DATA_DIR)
@@ -105,7 +106,7 @@ def skill_inventory(roots=None) -> list:
     return sorted(skills.values(), key=lambda x: x["name"].casefold())
 
 
-def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None, names=None, sources=None) -> dict:
+def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None, names=None, sources=None, check_dependencies=False, native=None, withheld=()) -> dict:
     from . import skill_sharing
 
     roots = roots if roots is not None else {k: os.path.expanduser(v) for k, v in SKILL_ROOTS.items()}
@@ -117,7 +118,7 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None,
         return {"linked": [], "registered": [], "present": [], "consolidated": [], "backups": [], "conflicts": [], "errors": [{"source": "Perch", "reason": f"Cannot recover sharing state: {exc}"}], "total": 0}
     from .resources import managed_names
 
-    excluded = managed_names('skill')
+    excluded = managed_names('skill') | set(withheld)
     inventory = [r for r in skill_inventory(roots) if r['name'] not in excluded]
     for name, source in (extra or {}).items():
         item = next((item for item in inventory if item["name"] == name), None)
@@ -133,6 +134,16 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None,
         name, origins = skill["name"], skill["origins"]
         registry = _shared_skill_root() / name
         try:
+            if check_dependencies and name not in (sources or {}):
+                reason = next((reason for path in origins.values() if (reason := skill_requirement(path))), None)
+                if reason:
+                    missing = [target for target in targets if target in roots
+                               and not (Path(roots[target]) / name / "SKILL.md").is_file()
+                               and target not in (native or {}).get(name, [])]
+                    if missing:
+                        report.setdefault("skipped", []).append({"skill": name, "reason": reason})
+                    report["present"].extend({"skill": name, "into": target} for target in targets if target not in missing and target in roots)
+                    continue
             trees = skill_sharing.compare(origins)
             source = skill_sharing.choose(origins, trees, registry, roots, (sources or {}).get(name))
             if source is None:
@@ -150,6 +161,9 @@ def sync_skills(roots=None, targets=SKILL_TARGETS, dry_run=False, *, extra=None,
                 if target not in roots:
                     continue
                 dest = Path(roots[target]) / name
+                if target in (native or {}).get(name, []) and not os.path.lexists(dest):
+                    present.append({"skill": name, "into": target, "kind": "plugin"})
+                    continue
                 if not skill_sharing.is_link(dest) and os.path.join(os.path.realpath(dest.parent), dest.name) == source:
                     continue  # Never replace the authoritative physical source.
                 if skill_sharing.points_to(dest, registry):
@@ -296,14 +310,15 @@ def _backup(path):
         atomic_write(backup, p.read_bytes().decode("utf-8"))
 
 
-def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, extra=None, names=None) -> dict:
+def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, extra=None, names=None, check_runtime=False, native=None, withheld=()) -> dict:
     from .resources import managed_names
 
-    excluded = managed_names('mcp')
+    excluded = managed_names('mcp') | set(withheld)
     registry_path = _mcp_registry(paths)
     paths = _paths(paths)
     report = {"found": 0, "sources": {}, "registered": [], "added": {}, "conflicts": [], "blocked": [], "errors": []}
     loaded, union, ambiguous, unavailable = {}, {}, set(), set()
+    disabled = set()
     inputs = [(source, path) for source, path in paths.items()]
     if extra:
         inputs.append(("plugin", None))
@@ -319,7 +334,10 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, e
                 try:
                     norm = _norm_server(cfg, source)
                     if norm is None:
+                        disabled.add(name)
                         continue
+                    if check_runtime and (reason := command_requirement(cfg)):
+                        raise ValueError(reason)
                 except ValueError as exc:
                     unavailable.add(name)
                     report["blocked"].append({"server": name, "source": source, "reason": str(exc)})
@@ -338,12 +356,17 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, e
         report["errors"].append({"source": "Perch", "reason": f"Cannot read MCP registry: {type(exc).__name__}"})
         return report
     for name, cfg in registry_servers.items():
+        if check_runtime and (reason := command_requirement(cfg)):
+            unavailable.add(name)
+            report["blocked"].append({"server": name, "source": "Perch", "reason": reason})
         if name in excluded:
             continue
         if name in union and union[name] != cfg:
             ambiguous.add(name)
         else:
             union[name] = cfg
+    for name in sorted(disabled - union.keys()):
+        report["blocked"].append({"server": name, "reason": "All native source entries are disabled"})
     if names is not None:
         union = {name: cfg for name, cfg in union.items() if name in names}
         ambiguous.intersection_update(names)
@@ -370,7 +393,7 @@ def sync_mcp(paths=None, targets=("claude", "codex", "omp"), dry_run=False, *, e
         raw, doc, existing = loaded[target]
         additions = {}
         for name, cfg in union.items():
-            if name in existing or name in ambiguous or name in unavailable:
+            if name in existing or name in ambiguous or name in unavailable or target in (native or {}).get(name, []):
                 continue
             try:
                 additions[name] = _encode(cfg, target)
@@ -443,7 +466,7 @@ def mcp_overview(paths=None):
     return sorted(servers.values(), key=lambda x: x["name"].casefold())
 
 
-def fingerprint():
+def fingerprint(plugin_sources=None):
     from .resources import catalog
 
     digest = hashlib.sha256(json.dumps(catalog(), sort_keys=True).encode())
@@ -466,6 +489,14 @@ def fingerprint():
                 digest.update(signature(root).encode())
             except (OSError, ValueError) as exc:
                 digest.update(str(exc).encode())
+    from .capabilities import sharing_sources
+
+    plugin_sources = sharing_sources() if plugin_sources is None else plugin_sources
+    digest.update(json.dumps(plugin_sources, sort_keys=True).encode())
+    for path in plugin_sources["skills"].values():
+        from .skill_sharing import signature
+
+        digest.update(signature(path).encode())
     return digest.hexdigest()
 
 
@@ -479,21 +510,31 @@ def sync_all(skills=True, mcp=True, targets=SKILL_TARGETS, dry_run=False, revisi
             from .resources import recover as recover_resources
 
             recover_resources()
-        before = fingerprint()
+        from .capabilities import sharing_sources
+
+        plugin_sources = sharing_sources()
+        before = fingerprint(plugin_sources)
         plan_id = hashlib.sha256((before + json.dumps([skills, mcp, targets, skill_sources, sorted(skill_names) if skill_names else None])).encode()).hexdigest()
         if revision is not None and revision != plan_id:
             raise ValueError("Tools or sharing preferences changed. Preview again before applying.")
         report = {
-            "skills": sync_skills(targets=targets, dry_run=dry_run, sources=skill_sources, names=skill_names)
+            "skills": sync_skills(targets=targets, dry_run=dry_run, sources=skill_sources, names=skill_names,
+                                  extra=plugin_sources["skills"], native=plugin_sources["native"], check_dependencies=True,
+                                  withheld=set(plugin_sources["withheld"]["skill"]) - set(skill_sources or {}))
             if skills
             else {"linked": [], "registered": [], "present": [], "conflicts": [], "errors": [], "total": 0},
-            "mcp": sync_mcp(targets=targets, dry_run=dry_run)
+            "mcp": sync_mcp(targets=targets, dry_run=dry_run, extra=plugin_sources["mcp"], check_runtime=True,
+                             native=plugin_sources["native_mcp"], withheld=plugin_sources["withheld"]["mcp"])
             if mcp
             else {"found": 0, "registered": [], "added": {}, "conflicts": [], "blocked": [], "errors": []},
             "dryRun": dry_run,
             "revision": plan_id,
             "ts": time.time(),
         }
+        report["skipped"] = [item for item in plugin_sources["skipped"]
+                             if (skills and "skill" in item and (skill_names is None or item["skill"] in skill_names))
+                             or (mcp and "server" in item)]
+        report["discoveryErrors"] = plugin_sources["errors"]
         if not dry_run:
             write_json(Path(PERCH_DIR) / "last-sync.json", report)
         return report
@@ -508,7 +549,7 @@ def overview():
             "Codex CLI and desktop share their user configuration.",
             "Skill links share edits immediately. Restart a harness if it does not refresh tools.",
             "Skills and portable MCP servers are managed through Perch's shared registry.",
-            "OAuth sign-ins, plugin installations, hooks and custom agents remain owned by each harness.",
+            "Perch-managed MCP servers can share a Perch sign-in. Native plugin accounts, hooks and custom agents remain harness-specific.",
             "Custom tool commands are transferable when packaged as stdio MCP servers.",
         ],
     }

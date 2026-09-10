@@ -29,7 +29,7 @@ The macOS release targets Apple silicon. Gatekeeper may require confirmation unt
 The current source supports:
 
 - Discovering compatible skills and MCP server definitions across installed harnesses.
-- Reading Claude plugin installations and Codex plugin caches, including their skill, MCP, and host-specific components. Cached entries are labelled separately from installations.
+- Reading Claude plugin installations and Codex plugin caches alongside enablement settings. Enabled native components count as present; unconfirmed cached versions remain separate.
 - Linking skills through a shared local registry and adding compatible MCP definitions to native harness configurations.
 - Reviewing and connecting individual skills and MCP components to selected harnesses through the same desktop and CLI engine.
 - Creating and editing skills and MCP server configurations inside Perch, with selected harness connections and recoverable removal.
@@ -61,7 +61,7 @@ Shared tool state lives alongside it:
 - `~/.perch/shared/skills/<name>` links each compatible skill to its detected source. Perch-managed harness skill directories link through this location, so an edit is immediately shared.
 - `~/.perch/shared/mcp/servers.json` stores portable MCP definitions. Perch writes compatible entries into each harness’s native configuration when you apply sharing.
 
-Identical skill folders can be consolidated through the shared registry. Perch keeps the authoritative source in place and backs up replaced harness entries. Different contents get an in-app source choice; unrelated entries and MCP configuration remain in place. Plugin packages, hooks, custom agents, and existing harness sign-in state stay with their own harnesses. Supported plugin skills and MCP definitions can be connected individually. Relative MCP paths are resolved within the plugin; unresolved environment variables and host-specific components require an adapter. Harness accounts and execution permissions remain with each harness.
+Identical skill folders can be consolidated through the shared registry. Perch keeps the authoritative source in place and backs up replaced harness entries. Different contents get an in-app source choice; unrelated entries and MCP configuration remain in place. Plugin packages, hooks, custom agents, and existing harness sign-in state stay with their own harnesses. Automatic sharing includes enabled plugins with instruction-only skills and compatible MCP definitions, without duplicating native plugin skills. Identical plugin skill versions appear once. Skills requiring host connectors, renderers, runtimes, or unreviewed bundled programs remain available in their native plugin but are excluded from automatic transfer. This dependency check is conservative; it does not prove every task described by a skill will work. Missing MCP executables and disabled sources are reported separately, and a configured connection does not certify authentication. Supported components can also be connected individually. Relative MCP paths are resolved within the plugin; unresolved environment variables and host-specific components require an adapter. Harness accounts and execution permissions remain with each harness.
 
 Review one connection with `perch-cli --link RESOURCE_ID --target codex`, using an ID from `--capabilities`. Apply that reviewed change with the same arguments plus `--apply --revision REVISION`. Changes to the source or existing configuration invalidate the review.
 

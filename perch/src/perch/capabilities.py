@@ -10,6 +10,7 @@ from pathlib import Path
 import tomllib
 
 from . import sync
+from .compatibility import command_requirement, skill_requirement
 from .storage import sync_lock
 
 
@@ -70,6 +71,16 @@ def discover_plugins(home=None):
     home = Path(home or Path.home())
     codex = Path(os.environ.get("CODEX_HOME", str(home / ".codex"))) if home == Path.home() else home / ".codex"
     candidates, errors = [], []
+    enabled = {}
+    for harness, settings_path in (("claude", home / ".claude/settings.json"), ("codex", codex / "config.toml")):
+        try:
+            settings = _read(settings_path) if settings_path.exists() else {}
+            enabled[harness] = settings.get("enabledPlugins" if harness == "claude" else "plugins", {})
+            if not isinstance(enabled[harness], dict):
+                raise ValueError("Plugin settings must be an object")
+        except (OSError, ValueError) as exc:
+            enabled[harness] = None
+            errors.append({"source": str(settings_path), "reason": str(exc)})
     index = home / ".claude/plugins/installed_plugins.json"
     if index.exists():
         try:
@@ -82,15 +93,17 @@ def discover_plugins(home=None):
                     continue
                 for entry in installs:
                     if isinstance(entry, dict) and isinstance(entry.get("installPath"), str):
-                        candidates.append(("claude", Path(entry["installPath"]), "installed", name))
+                        candidates.append(("claude", Path(entry["installPath"]), "installed", name, entry.get("scope", "user")))
         except (OSError, ValueError) as exc:
             errors.append({"source": str(index), "reason": str(exc)})
     for format_name in ("codex", "claude"):
         for manifest in sorted((codex / "plugins/cache").glob(f"*/*/*/.{format_name}-plugin/plugin.json")):
-            candidates.append(("codex", manifest.parent.parent, "cached", manifest.parent.parent.parent.name))
+            root = manifest.parent.parent
+            key = root.parent.name + "@" + root.parent.parent.name
+            candidates.append(("codex", root, "cached", key, "user"))
     items = []
     seen = set()
-    for harness, root, discovery, name in candidates:
+    for harness, root, discovery, name, scope in candidates:
         try:
             root = root.resolve()
             if (harness, root) in seen:
@@ -102,12 +115,19 @@ def discover_plugins(home=None):
             if not manifest_path.exists():
                 manifest_path = root / ".claude-plugin/plugin.json"
             manifest = _read(manifest_path) if manifest_path.exists() else {}
-            name = manifest.get("name", name)
+            key = name
+            config = (enabled.get(harness) or {}).get(key)
+            active = (config is not False) if harness == "claude" else isinstance(config, dict) and config.get("enabled") is True
+            if enabled.get(harness) is None or scope != "user":
+                active = False
+            disabled = config is False or (isinstance(config, dict) and config.get("enabled") is False)
+            name = manifest.get("name", name.split("@")[0])
             if not isinstance(name, str) or not name:
                 raise ValueError("Plugin name must be text")
             plugin_id = _id("plugin", harness + str(root))
             plugin = {"id": plugin_id, "kind": "plugin", "name": name, "harness": harness,
-                      "path": str(root), "discovery": discovery, "components": []}
+                      "path": str(root), "discovery": discovery, "components": [],
+                      "key": key, "enabled": active, "disabled": disabled, "scope": scope}
             items.append(plugin)
             components = plugin["components"]
             skill_roots = manifest.get("skills", ["./skills"])
@@ -122,8 +142,8 @@ def discover_plugins(home=None):
                 paths = [folder] if (folder / "SKILL.md").is_file() else sorted(folder.glob("*/SKILL.md"))
                 for path in paths:
                     path = _within(root, str(path.parent if path.name == "SKILL.md" else path))
-                    text = _within(root, str(path / "SKILL.md")).read_text(encoding="utf-8")
-                    reason = "Requires a host plugin variable" if "${CLAUDE_PLUGIN_" in text or "${CODEX_PLUGIN_" in text else None
+                    _within(root, str(path / "SKILL.md"))
+                    reason = skill_requirement(path)
                     components.append({"kind": "skill", "name": path.name, "path": str(path), "reason": reason})
             configs = manifest.get("mcpServers", [])
             configs = [configs] if isinstance(configs, (str, dict)) else configs
@@ -150,6 +170,12 @@ def discover_plugins(home=None):
             if items and items[-1].get("path") == str(root):
                 for component in items[-1]["components"]:
                     component["reason"] = "Plugin discovery is incomplete; fix its manifest first"
+    # An enabled package name does not identify which of several cached versions is active.
+    for plugin in items:
+        versions = [p for p in items if (p["harness"], p["key"]) == (plugin["harness"], plugin["key"])]
+        plugin["active"] = plugin["enabled"] and len(versions) == 1
+        if plugin["active"]:
+            plugin["discovery"] = "enabled"
     return items, errors
 
 
@@ -158,18 +184,18 @@ def _report(kind, name, target, component=None, dry_run=True):
     if component:
         extra = {name: component["path"] if kind == "skill" else component["definition"]}
     fn = sync.sync_skills if kind == "skill" else sync.sync_mcp
-    return fn(targets=(target,), dry_run=dry_run, extra=extra, names={name})
+    return fn(targets=(target,), dry_run=dry_run, extra=extra, names={name}, **({"check_dependencies": True} if kind == "skill" else {"check_runtime": True}))
 
 
 def _status(report, kind, name, target, present):
-    issues = [item for key in ("errors", "conflicts", "blocked") for item in report.get(key, [])
+    issues = [item for key in ("errors", "conflicts", "blocked", "skipped") for item in report.get(key, [])
               if (item.get("skill") or item.get("server") or name) == name]
     if issues:
         return {"status": "blocked", "reason": issues[0].get("reason", "Needs review")}
     present = present or any(item.get("into") == target and item.get("skill") == name for item in report.get("present", []))
     additions = any(item.get("into") == target and item.get("skill") == name for item in report.get("linked", [])) if kind == "skill" else name in report.get("added", {}).get(target, [])
     if not present and not additions:
-        return {"status": "blocked", "reason": "No enabled compatible source can be connected to this destination"}
+        return {"status": "blocked", "reason": "No enabled source is available; check the source harness configuration"}
     return {"status": "present" if present else "available", "reason": ""}
 
 
@@ -181,7 +207,7 @@ def inventory(*, base=None, plugins=None, errors=None):
         plugins, errors = discover_plugins()
     resources = []
     native_mcp = {}
-    if live and any(c["kind"] == "mcp" for p in plugins for c in p["components"]):
+    if live:
         for hid, path in sync._paths().items():
             try:
                 native_mcp[hid] = sync._load(path, hid == "codex")[2]
@@ -197,10 +223,19 @@ def inventory(*, base=None, plugins=None, errors=None):
                 elif hid in item.get("disabledIn", []):
                     status = {"status": "disabled", "reason": "Disabled in this harness"}
                 else:
-                    status = {"status": "present" if hid in item["presentIn"] else "review", "reason": "Review sharing to check compatibility"}
+                    reason = None
+                    if kind == "mcp":
+                        cfg = native_mcp.get(hid, {}).get(item["name"])
+                        reason = command_requirement(cfg) if cfg is not None else None
+                        if hid not in item["presentIn"] and live:
+                            status = _status(_report(kind, item["name"], hid), kind, item["name"], hid, False)
+                        else:
+                            status = {"status": "blocked" if reason else ("present" if hid in item["presentIn"] else "review"), "reason": reason or "Configured; authentication is not verified"}
+                    else:
+                        status = {"status": "present" if hid in item["presentIn"] else "review", "reason": "Review sharing to check compatibility"}
                 resource.compatibility[hid] = status
             resources.append(asdict(resource))
-    for plugin in plugins:
+    for plugin in sorted(plugins, key=lambda p: not p.get("active", False)):
         parent = Capability(plugin["id"], "plugin", plugin["name"], {plugin["harness"]: plugin["path"]}, discovery=plugin["discovery"])
         for hid in sync.TARGET_NAMES:
             parent.compatibility[hid] = {"status": "components", "reason": "Review individual components"}
@@ -213,11 +248,15 @@ def inventory(*, base=None, plugins=None, errors=None):
             seen.add(identity)
             rid = _id(component["kind"], plugin["id"] + identity)
             resource = Capability(rid, component["kind"], component["name"], {plugin["harness"]: component.get("path", plugin["path"])}, plugin=plugin["id"], discovery=plugin["discovery"])
+            native = plugin.get("active", False)
+            if native:
+                resource.presentIn.append(plugin["harness"])
             if resource.kind == "skill":
                 standalone = next((r for r in resources if r["kind"] == "skill" and not r["plugin"] and r["name"] == resource.name), None)
                 if standalone:
-                    resource.presentIn = [hid for hid, path in standalone["origins"].items() if Path(path).resolve() == Path(component["path"]).resolve()]
-                    if len(resource.presentIn) == len(standalone["origins"]):
+                    linked = [hid for hid, path in standalone["origins"].items() if Path(path).resolve() == Path(component["path"]).resolve()]
+                    resource.presentIn = sorted(set(resource.presentIn + linked))
+                    if len(linked) == len(standalone["origins"]):
                         resources.remove(standalone)
             elif resource.kind == "mcp":
                 for hid, definitions in native_mcp.items():
@@ -229,8 +268,24 @@ def inventory(*, base=None, plugins=None, errors=None):
                         continue
             for hid in sync.TARGET_NAMES:
                 reason = component.get("reason")
-                if hid in resource.presentIn:
-                    status = {"status": "present", "reason": ""}
+                if resource.kind == "skill":
+                    reason = reason or skill_requirement(component["path"])
+                elif resource.kind == "mcp":
+                    reason = reason or command_requirement(component["definition"])
+                    if not reason:
+                        try:
+                            sync._norm_server(component["definition"], "plugin")
+                        except ValueError as exc:
+                            reason = str(exc)
+                if plugin.get("disabled"):
+                    reason = "Source plugin is disabled"
+                elif plugin.get("scope", "user") != "user":
+                    reason = "Project plugin; not shared into global harness settings"
+                runtime_problem = command_requirement(component["definition"]) if resource.kind == "mcp" else None
+                if hid == plugin["harness"] and native and runtime_problem:
+                    status = {"status": "blocked", "reason": runtime_problem}
+                elif hid in resource.presentIn:
+                    status = {"status": "present", "reason": "Provided by the enabled plugin" if native and hid == plugin["harness"] else ""}
                 elif reason or resource.kind not in ("skill", "mcp") or (resource.kind == "skill" and hid not in sync.SKILL_TARGETS):
                     status = {"status": "unsupported", "reason": reason or "No compatible adapter"}
                 else:
@@ -239,6 +294,32 @@ def inventory(*, base=None, plugins=None, errors=None):
             parent.components.append(rid)
             resources.append(asdict(resource))
         next(r for r in resources if r["id"] == parent.id)["components"] = parent.components
+    # Merge identical skill versions without merging different content or losing parent links.
+    from .skill_sharing import signature
+
+    identical, aliases, merged = {}, {}, []
+    for resource in resources:
+        key = None
+        if resource["kind"] == "skill" and resource["plugin"]:
+            try:
+                key = (resource["name"], signature(next(iter(resource["origins"].values()))))
+            except (OSError, ValueError):
+                pass
+        if key and key in identical:
+            existing = identical[key]
+            aliases[resource["id"]] = existing["id"]
+            existing["origins"].update(resource["origins"])
+            existing["presentIn"] = sorted(set(existing["presentIn"] + resource["presentIn"]))
+            for hid, status in resource["compatibility"].items():
+                if status["status"] == "present":
+                    existing["compatibility"][hid] = status
+        else:
+            merged.append(resource)
+            if key:
+                identical[key] = resource
+    resources = merged
+    for resource in resources:
+        resource["components"] = list(dict.fromkeys(aliases.get(rid, rid) for rid in resource["components"]))
     from .resources import overlay
 
     return {"resources": overlay(resources, base["targets"]) if live else resources, "targets": base["targets"], "errors": errors or []}
@@ -257,6 +338,12 @@ def link(resource_id, target, *, revision=None, apply=False):
             raise ValueError("Select a skill or MCP component")
         if resource["compatibility"][target]["status"] in ("unsupported", "disabled"):
             raise ValueError(resource["compatibility"][target]["reason"])
+        if resource["compatibility"][target]["status"] == "blocked":
+            return {"id": resource_id, "target": target, "revision": sync.fingerprint(), "applied": False,
+                    **resource["compatibility"][target]}
+        if target in resource["presentIn"]:
+            return {"id": resource_id, "target": target, "revision": sync.fingerprint(), "applied": apply,
+                    "status": "present", "reason": "Already supplied in this harness"}
         component = None
         if resource["plugin"]:
             plugin = next(p for p in plugins if p["id"] == resource["plugin"])
@@ -276,3 +363,48 @@ def link(resource_id, target, *, revision=None, apply=False):
             report = _report(resource["kind"], resource["name"], target, component, dry_run=False)
             status = _status(report, resource["kind"], resource["name"], target, True)
         return {"id": resource_id, "target": target, "revision": digest, "applied": apply and status["status"] == "present", **status}
+
+
+def sharing_sources(plugins=None):
+    """Collect active portable components once, retaining native skill destinations."""
+    from .skill_sharing import signature
+
+    if plugins is None:
+        plugins, errors = discover_plugins()
+    else:
+        errors = []
+    groups, skipped = {}, []
+    native, native_mcp, withheld = {}, {}, {"skill": [], "mcp": []}
+    for plugin in plugins:
+        if not plugin.get("active", False) or plugin.get("disabled") or plugin.get("scope", "user") != "user":
+            continue
+        for component in plugin["components"]:
+            kind, name = component["kind"], component["name"]
+            if kind not in ("skill", "mcp"):
+                continue
+            reason = component.get("reason")
+            try:
+                if kind == "skill":
+                    reason = reason or skill_requirement(component["path"])
+                    identity = signature(component["path"]) if not reason else None
+                    native.setdefault(name, set()).add(plugin["harness"])
+                else:
+                    native_mcp.setdefault(name, set()).add(plugin["harness"])
+                    reason = reason or command_requirement(component["definition"])
+                    normalized = sync._norm_server(component["definition"], "plugin") if not reason else None
+                    identity = json.dumps(normalized, sort_keys=True)
+            except (OSError, ValueError) as exc:
+                reason = str(exc)
+            if reason:
+                skipped.append({"skill" if kind == "skill" else "server": name, "reason": reason})
+                continue
+            groups.setdefault((kind, name), []).append((identity, component))
+    skills, mcp = {}, {}
+    for (kind, name), entries in groups.items():
+        if len({identity for identity, _ in entries}) > 1:
+            withheld[kind].append(name)
+            skipped.append({"skill" if kind == "skill" else "server": name, "reason": "Enabled plugin versions differ; choose a source before sharing"})
+            continue
+        component = entries[0][1]
+        (skills if kind == "skill" else mcp)[name] = component["path"] if kind == "skill" else component["definition"]
+    return {"skills": skills, "mcp": mcp, "native": {k: sorted(v) for k, v in native.items()}, "native_mcp": {k: sorted(v) for k, v in native_mcp.items()}, "withheld": withheld, "skipped": skipped, "errors": errors}

@@ -338,7 +338,8 @@ class CliDesktopSharingTests(unittest.TestCase):
                 k: str(root / (k + (".toml" if k == "codex" else ".json")))
                 for k in ("claude", "codex", "omp", "claude-desktop", "claude_mcpjson")
             }
-            Path(paths["claude"]).write_text(json.dumps({"mcpServers": {"portable": {"command": "example"}}}))
+            stack.enter_context(patch("perch.capabilities.discover_plugins", return_value=([], [])))
+            Path(paths["claude"]).write_text(json.dumps({"mcpServers": {"portable": {"command": sys.executable}}}))
             skill_roots = {k: str(root / "skills" / k) for k in ("claude", "codex", "omp")}
             source = Path(skill_roots["claude"]) / "review"
             source.mkdir(parents=True)
@@ -374,7 +375,7 @@ class CliDesktopSharingTests(unittest.TestCase):
             self.assertEqual(applied["mcp"]["added"], cli_plan["mcp"]["added"])
             self.assertEqual(
                 tomllib.loads(Path(paths["codex"]).read_text())["mcp_servers"]["portable"]["command"],
-                "example",
+                sys.executable,
             )
             self.assertEqual(
                 (Path(skill_roots["codex"]) / "review" / "SKILL.md").read_text(),
