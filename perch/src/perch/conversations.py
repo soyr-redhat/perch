@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -25,8 +26,10 @@ def _stamp(stat):
 
 def _copy_source(source, destination):
     digest = hashlib.sha256()
-    if not stat.S_ISREG(source.stat().st_mode):
+    path_stat = source.stat()
+    if not stat.S_ISREG(path_stat.st_mode):
         raise ValueError("The session recording must be a regular file")
+    path_before = _stamp(path_stat)
     with source.open("rb") as src, destination.open("xb") as dst:
         before = _stamp(os.fstat(src.fileno()))
         remaining = before[2]
@@ -34,7 +37,9 @@ def _copy_source(source, destination):
             dst.write(chunk)
             digest.update(chunk)
             remaining -= len(chunk)
-        if remaining or before != _stamp(os.fstat(src.fileno())) or before != _stamp(source.stat()):
+        # Compare each API with itself; Windows stat/fstat metadata can differ
+        # even for the same unchanged file.
+        if remaining or before != _stamp(os.fstat(src.fileno())) or path_before != _stamp(source.stat()):
             raise ValueError("The session changed during export. Try again when it is idle.")
     return digest.hexdigest(), before[2]
 
@@ -147,7 +152,7 @@ def export_session(agent, *, data_dir=DATA_DIR, format="jsonl"):
                     transcript.write("See original source recording: " + str(exc))
                 transcript.write("\n\n")
         manifest = {
-            "schemaVersion": 1, "id": snapshot_id,
+            "schemaVersion": 1, "id": snapshot_id, "createdAt": datetime.now(timezone.utc).isoformat(),
             "source": {key: agent.get(key) for key in ("id", "harness", "title", "cwd", "file")},
             "recording": {"path": source_name, "sha256": digest, "size": size, "format": format},
             "transcript": {"path": "transcript.txt", "order": "source", "records": records, "warnings": warnings},

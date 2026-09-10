@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -102,6 +103,20 @@ class SnapshotTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "changed"):
                 conversations.export_session(self.agent, data_dir=self.root)
         self.assertEqual(list((self.root / "conversations").iterdir()), [])
+
+    def test_stat_and_fstat_metadata_difference_is_not_a_source_change(self):
+        self.source.write_bytes(b'{"text":"unchanged"}\n')
+        real_fstat = conversations.os.fstat
+
+        def different_fstat(fd):
+            info = real_fstat(fd)
+            return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size,
+                                   st_mtime_ns=info.st_mtime_ns + 100,
+                                   st_ctime_ns=info.st_ctime_ns + 100)
+
+        with patch.object(conversations.os, "fstat", side_effect=different_fstat):
+            conversations._copy_source(self.source, self.root / "copy.jsonl")
+        self.assertEqual((self.root / "copy.jsonl").read_bytes(), self.source.read_bytes())
 
     def test_failed_archive_is_not_published(self):
         with patch.object(zipfile.ZipFile, "write", side_effect=OSError("Disk full")):
