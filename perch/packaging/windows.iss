@@ -1,6 +1,6 @@
 [Setup]
 AppName=Perch
-AppVersion=0.2.0
+AppVersion=0.3.0
 AppId=dev.soyr.perch
 DefaultDirName={localappdata}\Programs\Perch
 DefaultGroupName=Perch

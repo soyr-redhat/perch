@@ -172,7 +172,7 @@ def parser():
     p.add_argument("--transfer-id", help="Optional UUID for repeatable preparation")
     p.add_argument("--send-transfer", metavar="UUID", help="Send prepared context through the running app; starts a harness turn")
     p.add_argument("--transfer-status", metavar="UUID", help="Read a saved transfer receipt")
-    p.add_argument("--version", action="version", version="Perch 0.2.0")
+    p.add_argument("--version", action="version", version="Perch 0.3.0")
     return p
 
 

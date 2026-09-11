@@ -18,5 +18,5 @@ cli = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name='perch-cli', co
 collection = COLLECT(exe, cli, analysis.binaries, analysis.datas, name=app_name, strip=False, upx=False)
 if sys.platform == 'darwin':
     app = BUNDLE(collection, name=app_name + '.app', bundle_identifier='dev.soyr.perch',
-        icon=str(icons / 'perch.icns'), info_plist={'CFBundleShortVersionString':'0.2.0','LSBackgroundOnly':False,'NSHighResolutionCapable':True,
+        icon=str(icons / 'perch.icns'), info_plist={'CFBundleShortVersionString':'0.3.0','LSBackgroundOnly':False,'NSHighResolutionCapable':True,
                     'NSHumanReadableCopyright':'Perch contributors'})
